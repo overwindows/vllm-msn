@@ -1,721 +1,258 @@
-# Adapted from
-# https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/serve/openai_api_server.py
-
-import argparse
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import asyncio
-import codecs
-import json
-import time
-from http import HTTPStatus
-from typing import AsyncGenerator, Dict, List, Optional, Tuple, Union
+import importlib
+import inspect
+import multiprocessing
+import multiprocessing.forkserver as forkserver
+import os
+import signal
+import socket
+import tempfile
+import warnings
+from argparse import Namespace
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 
-from aioprometheus import MetricsMiddleware
-from aioprometheus.asgi.starlette import metrics
-import fastapi
-import uvicorn
-from fastapi import Request
+import uvloop
+from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse, Response
+from starlette.datastructures import State
 
+import vllm.envs as envs
+from vllm.config import ModelConfig, VllmConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.engine.async_llm_engine import AsyncLLMEngine
-from vllm.engine.metrics import add_global_metrics_labels
-from vllm.entrypoints.openai.protocol import (
-    CompletionRequest, CompletionResponse, CompletionResponseChoice,
-    CompletionResponseStreamChoice, CompletionStreamResponse,
-    ChatCompletionRequest, ChatCompletionResponse,
-    ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatMessage, DeltaMessage, ErrorResponse,
-    LogProbs, ModelCard, ModelList, ModelPermission, UsageInfo)
+from vllm.engine.protocol import EngineClient
+from vllm.entrypoints.chat_utils import load_chat_template
+from vllm.entrypoints.launcher import serve_http
+from vllm.entrypoints.logger import RequestLogger
+from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
+from vllm.entrypoints.openai.engine.protocol import GenerationError
+from vllm.entrypoints.openai.models.protocol import BaseModelPath
+from vllm.entrypoints.openai.models.serving import OpenAIServingModels
+from vllm.entrypoints.openai.server_utils import (
+    engine_error_handler,
+    exception_handler,
+    generation_error_handler,
+    get_uvicorn_log_config,
+    http_exception_handler,
+    lifespan,
+    log_response,
+    validation_exception_handler,
+)
+from vllm.entrypoints.sagemaker.api_router import sagemaker_standards_bootstrap
+from vllm.entrypoints.serve.elastic_ep.middleware import (
+    ScalingMiddleware,
+)
+from vllm.entrypoints.serve.render.serving import OpenAIServingRender
+from vllm.entrypoints.serve.tokenize.serving import OpenAIServingTokenization
+from vllm.entrypoints.utils import (
+    cli_env_setup,
+    log_non_default_args,
+    log_version_and_model,
+    process_lora_modules,
+)
 from vllm.logger import init_logger
-from vllm.outputs import RequestOutput
-from vllm.sampling_params import SamplingParams
-from vllm.transformers_utils.tokenizer import get_tokenizer
-from vllm.utils import random_uuid
+from vllm.reasoning import ReasoningParserManager
+from vllm.tasks import POOLING_TASKS, SupportedTask
+from vllm.tool_parsers import ToolParserManager
+from vllm.tracing import instrument
+from vllm.usage.usage_lib import UsageContext
+from vllm.utils.argparse_utils import FlexibleArgumentParser
+from vllm.utils.network_utils import is_valid_ipv6_address
+from vllm.utils.system_utils import decorate_logs, set_ulimit
+from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
+from vllm.version import __version__ as VLLM_VERSION
 
-TIMEOUT_KEEP_ALIVE = 5  # seconds
+prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
-logger = init_logger(__name__)
-served_model = None
-app = fastapi.FastAPI()
-engine = None
-response_role = None
+# Cannot use __name__ (https://github.com/vllm-project/vllm/pull/4765)
+logger = init_logger("vllm.entrypoints.openai.api_server")
 
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="vLLM OpenAI-Compatible RESTful API server.")
-    parser.add_argument("--host", type=str, default=None, help="host name")
-    parser.add_argument("--port", type=int, default=8000, help="port number")
-    parser.add_argument("--allow-credentials",
-                        action="store_true",
-                        help="allow credentials")
-    parser.add_argument("--allowed-origins",
-                        type=json.loads,
-                        default=["*"],
-                        help="allowed origins")
-    parser.add_argument("--allowed-methods",
-                        type=json.loads,
-                        default=["*"],
-                        help="allowed methods")
-    parser.add_argument("--allowed-headers",
-                        type=json.loads,
-                        default=["*"],
-                        help="allowed headers")
-    parser.add_argument("--served-model-name",
-                        type=str,
-                        default=None,
-                        help="The model name used in the API. If not "
-                        "specified, the model name will be the same as "
-                        "the huggingface name.")
-    parser.add_argument("--chat-template",
-                        type=str,
-                        default=None,
-                        help="The file path to the chat template, "
-                        "or the template in single-line form "
-                        "for the specified model")
-    parser.add_argument("--response-role",
-                        type=str,
-                        default="assistant",
-                        help="The role name to return if "
-                        "`request.add_generation_prompt=true`.")
-    parser.add_argument("--ssl-keyfile",
-                        type=str,
-                        default=None,
-                        help="The file path to the SSL key file")
-    parser.add_argument("--ssl-certfile",
-                        type=str,
-                        default=None,
-                        help="The file path to the SSL cert file")
-
-    parser = AsyncEngineArgs.add_cli_args(parser)
-    return parser.parse_args()
+_FALLBACK_SUPPORTED_TASKS: tuple[SupportedTask, ...] = ("generate",)
 
 
-app.add_middleware(MetricsMiddleware)  # Trace HTTP server metrics
-app.add_route("/metrics", metrics)  # Exposes HTTP metrics
+@asynccontextmanager
+async def build_async_engine_client(
+    args: Namespace,
+    *,
+    usage_context: UsageContext = UsageContext.OPENAI_API_SERVER,
+    client_config: dict[str, Any] | None = None,
+) -> AsyncIterator[EngineClient]:
+    if os.getenv("VLLM_WORKER_MULTIPROC_METHOD") == "forkserver":
+        # The executor is expected to be mp.
+        # Pre-import heavy modules in the forkserver process
+        logger.debug("Setup forkserver with pre-imports")
+        multiprocessing.set_start_method("forkserver")
+        multiprocessing.set_forkserver_preload(["vllm.v1.engine.async_llm"])
+        forkserver.ensure_running()
+        logger.debug("Forkserver setup complete!")
+
+    # Context manager to handle engine_client lifecycle
+    # Ensures everything is shutdown and cleaned up on error/exit
+    engine_args = AsyncEngineArgs.from_cli_args(args)
+    if client_config:
+        engine_args._api_process_count = client_config.get("client_count", 1)
+        engine_args._api_process_rank = client_config.get("client_index", 0)
+
+    async with build_async_engine_client_from_engine_args(
+        engine_args,
+        usage_context=usage_context,
+        client_config=client_config,
+    ) as engine:
+        yield engine
 
 
-def create_error_response(status_code: HTTPStatus,
-                          message: str) -> JSONResponse:
-    return JSONResponse(ErrorResponse(message=message,
-                                      type="invalid_request_error").dict(),
-                        status_code=status_code.value)
-
-
-def load_chat_template(args, tokenizer):
-    if args.chat_template is not None:
-        try:
-            with open(args.chat_template, "r") as f:
-                chat_template = f.read()
-        except OSError:
-            # If opening a file fails, set chat template to be args to
-            # ensure we decode so our escape are interpreted correctly
-            chat_template = codecs.decode(args.chat_template, "unicode_escape")
-
-        tokenizer.chat_template = chat_template
-        logger.info(
-            f"Using supplied chat template:\n{tokenizer.chat_template}")
-    elif tokenizer.chat_template is not None:
-        logger.info(f"Using default chat template:\n{tokenizer.chat_template}")
-    else:
-        logger.warning("No chat template provided. Chat API will not work.")
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(_, exc):
-    return create_error_response(HTTPStatus.BAD_REQUEST, str(exc))
-
-
-async def check_model(request) -> Optional[JSONResponse]:
-    if request.model == served_model:
-        return
-    ret = create_error_response(
-        HTTPStatus.NOT_FOUND,
-        f"The model `{request.model}` does not exist.",
-    )
-    return ret
-
-
-async def check_length(
-    request: Union[ChatCompletionRequest, CompletionRequest],
-    prompt: Optional[str] = None,
-    prompt_ids: Optional[List[int]] = None
-) -> Tuple[List[int], Optional[JSONResponse]]:
-    assert (not (prompt is None and prompt_ids is None)
-            and not (prompt is not None and prompt_ids is not None)
-            ), "Either prompt or prompt_ids should be provided."
-    input_ids = prompt_ids if prompt_ids is not None else tokenizer(
-        prompt).input_ids
-    token_num = len(input_ids)
-
-    if request.max_tokens is None:
-        request.max_tokens = max_model_len - token_num
-    if token_num + request.max_tokens > max_model_len:
-        return input_ids, create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            f"This model's maximum context length is {max_model_len} tokens. "
-            f"However, you requested {request.max_tokens + token_num} tokens "
-            f"({token_num} in the messages, "
-            f"{request.max_tokens} in the completion). "
-            f"Please reduce the length of the messages or completion.",
-        )
-    else:
-        return input_ids, None
-
-
-@app.get("/health")
-async def health() -> Response:
-    """Health check."""
-    return Response(status_code=200)
-
-
-@app.get("/v1/models")
-async def show_available_models():
-    """Show available models. Right now we only have one model."""
-    model_cards = [
-        ModelCard(id=served_model,
-                  root=served_model,
-                  permission=[ModelPermission()])
-    ]
-    return ModelList(data=model_cards)
-
-
-def create_logprobs(
-    token_ids: List[int],
-    top_logprobs: Optional[List[Optional[Dict[int, float]]]] = None,
-    num_output_top_logprobs: Optional[int] = None,
-    initial_text_offset: int = 0,
-) -> LogProbs:
-    """Create OpenAI-style logprobs."""
-    logprobs = LogProbs()
-    last_token_len = 0
-    if num_output_top_logprobs:
-        logprobs.top_logprobs = []
-    for i, token_id in enumerate(token_ids):
-        step_top_logprobs = top_logprobs[i]
-        if step_top_logprobs is not None:
-            token_logprob = step_top_logprobs[token_id]
-        else:
-            token_logprob = None
-        token = tokenizer.convert_ids_to_tokens(token_id)
-        logprobs.tokens.append(token)
-        logprobs.token_logprobs.append(token_logprob)
-        if len(logprobs.text_offset) == 0:
-            logprobs.text_offset.append(initial_text_offset)
-        else:
-            logprobs.text_offset.append(logprobs.text_offset[-1] +
-                                        last_token_len)
-        last_token_len = len(token)
-
-        if num_output_top_logprobs:
-            logprobs.top_logprobs.append({
-                tokenizer.convert_ids_to_tokens(i): p
-                for i, p in step_top_logprobs.items()
-            } if step_top_logprobs else None)
-    return logprobs
-
-
-@app.post("/v1/chat/completions")
-async def create_chat_completion(request: ChatCompletionRequest,
-                                 raw_request: Request):
-    """Completion API similar to OpenAI's API.
-
-    See  https://platform.openai.com/docs/api-reference/chat/create
-    for the API specification. This API mimics the OpenAI ChatCompletion API.
-
-    NOTE: Currently we do not support the following features:
-        - function_call (Users should implement this by themselves)
-        - logit_bias (to be supported by vLLM engine)
+@asynccontextmanager
+async def build_async_engine_client_from_engine_args(
+    engine_args: AsyncEngineArgs,
+    *,
+    usage_context: UsageContext = UsageContext.OPENAI_API_SERVER,
+    client_config: dict[str, Any] | None = None,
+) -> AsyncIterator[EngineClient]:
     """
-    error_check_ret = await check_model(request)
-    if error_check_ret is not None:
-        return error_check_ret
+    Create EngineClient, either:
+        - in-process using the AsyncLLMEngine Directly
+        - multiprocess using AsyncLLMEngine RPC
 
-    if request.logit_bias is not None and len(request.logit_bias) > 0:
-        # TODO: support logit_bias in vLLM engine.
-        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     "logit_bias is not currently supported")
-
-    try:
-        prompt = tokenizer.apply_chat_template(
-            conversation=request.messages,
-            tokenize=False,
-            add_generation_prompt=request.add_generation_prompt)
-    except Exception as e:
-        logger.error(f"Error in applying chat template from request: {str(e)}")
-        return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
-
-    token_ids, error_check_ret = await check_length(request, prompt=prompt)
-    if error_check_ret is not None:
-        return error_check_ret
-
-    model_name = request.model
-    request_id = f"cmpl-{random_uuid()}"
-    created_time = int(time.monotonic())
-    chunk_object_type = "chat.completion.chunk"
-    try:
-        spaces_between_special_tokens = request.spaces_between_special_tokens
-        sampling_params = SamplingParams(
-            n=request.n,
-            presence_penalty=request.presence_penalty,
-            frequency_penalty=request.frequency_penalty,
-            repetition_penalty=request.repetition_penalty,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            min_p=request.min_p,
-            stop=request.stop,
-            stop_token_ids=request.stop_token_ids,
-            max_tokens=request.max_tokens,
-            best_of=request.best_of,
-            top_k=request.top_k,
-            ignore_eos=request.ignore_eos,
-            use_beam_search=request.use_beam_search,
-            skip_special_tokens=request.skip_special_tokens,
-            spaces_between_special_tokens=spaces_between_special_tokens,
-        )
-    except ValueError as e:
-        return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
-
-    result_generator = engine.generate(prompt, sampling_params, request_id,
-                                       token_ids)
-
-    def get_role() -> str:
-        if request.add_generation_prompt:
-            return response_role
-        else:
-            return request.messages[-1]["role"]
-
-    async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        # Send first response for each request.n (index) with the role
-        role = get_role()
-        for i in range(request.n):
-            choice_data = ChatCompletionResponseStreamChoice(
-                index=i, delta=DeltaMessage(role=role), finish_reason=None)
-            chunk = ChatCompletionStreamResponse(id=request_id,
-                                                 object=chunk_object_type,
-                                                 created=created_time,
-                                                 choices=[choice_data],
-                                                 model=model_name)
-            data = chunk.json(exclude_unset=True, ensure_ascii=False)
-            yield f"data: {data}\n\n"
-
-        # Send response to echo the input portion of the last message
-        if request.echo:
-            last_msg_content = ""
-            if request.messages and isinstance(
-                    request.messages, list) and request.messages[-1].get(
-                        "content") and request.messages[-1].get(
-                            "role") == role:
-                last_msg_content = request.messages[-1]["content"]
-            if last_msg_content:
-                for i in range(request.n):
-                    choice_data = ChatCompletionResponseStreamChoice(
-                        index=i,
-                        delta=DeltaMessage(content=last_msg_content),
-                        finish_reason=None)
-                    chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        object=chunk_object_type,
-                        created=created_time,
-                        choices=[choice_data],
-                        model=model_name)
-                    data = chunk.json(exclude_unset=True, ensure_ascii=False)
-                    yield f"data: {data}\n\n"
-
-        # Send response for each token for each request.n (index)
-        previous_texts = [""] * request.n
-        previous_num_tokens = [0] * request.n
-        finish_reason_sent = [False] * request.n
-        async for res in result_generator:
-            res: RequestOutput
-            for output in res.outputs:
-                i = output.index
-
-                if finish_reason_sent[i]:
-                    continue
-
-                if output.finish_reason is None:
-                    # Send token-by-token response for each request.n
-                    delta_text = output.text[len(previous_texts[i]):]
-                    previous_texts[i] = output.text
-                    previous_num_tokens[i] = len(output.token_ids)
-                    choice_data = ChatCompletionResponseStreamChoice(
-                        index=i,
-                        delta=DeltaMessage(content=delta_text),
-                        finish_reason=None)
-                    chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        object=chunk_object_type,
-                        created=created_time,
-                        choices=[choice_data],
-                        model=model_name)
-                    data = chunk.json(exclude_unset=True, ensure_ascii=False)
-                    yield f"data: {data}\n\n"
-                else:
-                    # Send the finish response for each request.n only once
-                    prompt_tokens = len(res.prompt_token_ids)
-                    final_usage = UsageInfo(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=previous_num_tokens[i],
-                        total_tokens=prompt_tokens + previous_num_tokens[i],
-                    )
-                    choice_data = ChatCompletionResponseStreamChoice(
-                        index=i, delta=[], finish_reason=output.finish_reason)
-                    chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        object=chunk_object_type,
-                        created=created_time,
-                        choices=[choice_data],
-                        model=model_name)
-                    if final_usage is not None:
-                        chunk.usage = final_usage
-                    data = chunk.json(exclude_unset=True,
-                                      exclude_none=True,
-                                      ensure_ascii=False)
-                    yield f"data: {data}\n\n"
-                    finish_reason_sent[i] = True
-        # Send the final done message after all response.n are finished
-        yield "data: [DONE]\n\n"
-
-    async def completion_full_generator():
-        final_res: RequestOutput = None
-        async for res in result_generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await engine.abort(request_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST,
-                                             "Client disconnected")
-            final_res = res
-        assert final_res is not None
-
-        choices = []
-        role = get_role()
-        for output in final_res.outputs:
-            choice_data = ChatCompletionResponseChoice(
-                index=output.index,
-                message=ChatMessage(role=role, content=output.text),
-                finish_reason=output.finish_reason,
-            )
-            choices.append(choice_data)
-
-        if request.echo:
-            last_msg_content = ""
-            if request.messages and isinstance(
-                    request.messages, list) and request.messages[-1].get(
-                        "content") and request.messages[-1].get(
-                            "role") == role:
-                last_msg_content = request.messages[-1]["content"]
-
-            for choice in choices:
-                full_message = last_msg_content + choice.message.content
-                choice.message.content = full_message
-
-        num_prompt_tokens = len(final_res.prompt_token_ids)
-        num_generated_tokens = sum(
-            len(output.token_ids) for output in final_res.outputs)
-        usage = UsageInfo(
-            prompt_tokens=num_prompt_tokens,
-            completion_tokens=num_generated_tokens,
-            total_tokens=num_prompt_tokens + num_generated_tokens,
-        )
-        response = ChatCompletionResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            choices=choices,
-            usage=usage,
-        )
-
-        return response
-
-    # Streaming response
-    if request.stream:
-        return StreamingResponse(completion_stream_generator(),
-                                 media_type="text/event-stream")
-    else:
-        return await completion_full_generator()
-
-
-@app.post("/v1/completions")
-async def create_completion(request: CompletionRequest, raw_request: Request):
-    """Completion API similar to OpenAI's API.
-
-    See https://platform.openai.com/docs/api-reference/completions/create
-    for the API specification. This API mimics the OpenAI Completion API.
-
-    NOTE: Currently we do not support the following features:
-        - suffix (the language models we currently support do not support
-          suffix)
-        - logit_bias (to be supported by vLLM engine)
+    Returns the Client or None if the creation failed.
     """
 
-    error_check_ret = await check_model(request)
-    if error_check_ret is not None:
-        return error_check_ret
+    # Create the EngineConfig (determines if we can use V1).
+    vllm_config = engine_args.create_engine_config(usage_context=usage_context)
 
-    # OpenAI API supports echoing the prompt when max_tokens is 0.
-    echo_without_generation = request.echo and request.max_tokens == 0
+    from vllm.v1.engine.async_llm import AsyncLLM
 
-    if request.suffix is not None:
-        # The language models we currently support do not support suffix.
-        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     "suffix is not currently supported")
+    async_llm: AsyncLLM | None = None
 
-    if request.logit_bias is not None and len(request.logit_bias) > 0:
-        # TODO: support logit_bias in vLLM engine.
-        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     "logit_bias is not currently supported")
+    # Don't mutate the input client_config
+    client_config = dict(client_config) if client_config else {}
+    client_count = client_config.pop("client_count", 1)
+    client_index = client_config.pop("client_index", 0)
 
-    model_name = request.model
-    request_id = f"cmpl-{random_uuid()}"
-
-    use_token_ids = False
-    if isinstance(request.prompt, list):
-        if len(request.prompt) == 0:
-            return create_error_response(HTTPStatus.BAD_REQUEST,
-                                         "please provide at least one prompt")
-        first_element = request.prompt[0]
-        if isinstance(first_element, int):
-            use_token_ids = True
-            prompt = request.prompt
-        elif isinstance(first_element, (str, list)):
-            # TODO: handles multiple prompt case in list[list[int]]
-            if len(request.prompt) > 1:
-                return create_error_response(
-                    HTTPStatus.BAD_REQUEST,
-                    "multiple prompts in a batch is not currently supported")
-            use_token_ids = not isinstance(first_element, str)
-            prompt = request.prompt[0]
-    else:
-        prompt = request.prompt
-
-    if use_token_ids:
-        _, error_check_ret = await check_length(request, prompt_ids=prompt)
-    else:
-        token_ids, error_check_ret = await check_length(request, prompt=prompt)
-    if error_check_ret is not None:
-        return error_check_ret
-
-    created_time = int(time.monotonic())
     try:
-        spaces_between_special_tokens = request.spaces_between_special_tokens
-        sampling_params = SamplingParams(
-            n=request.n,
-            best_of=request.best_of,
-            presence_penalty=request.presence_penalty,
-            frequency_penalty=request.frequency_penalty,
-            repetition_penalty=request.repetition_penalty,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            min_p=request.min_p,
-            stop=request.stop,
-            stop_token_ids=request.stop_token_ids,
-            ignore_eos=request.ignore_eos,
-            max_tokens=request.max_tokens
-            if not echo_without_generation else 1,
-            logprobs=request.logprobs,
-            use_beam_search=request.use_beam_search,
-            prompt_logprobs=request.logprobs if request.echo else None,
-            skip_special_tokens=request.skip_special_tokens,
-            spaces_between_special_tokens=spaces_between_special_tokens,
+        async_llm = AsyncLLM.from_vllm_config(
+            vllm_config=vllm_config,
+            usage_context=usage_context,
+            enable_log_requests=engine_args.enable_log_requests,
+            aggregate_engine_logging=engine_args.aggregate_engine_logging,
+            disable_log_stats=engine_args.disable_log_stats,
+            client_addresses=client_config,
+            client_count=client_count,
+            client_index=client_index,
         )
-    except ValueError as e:
-        return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
-    if use_token_ids:
-        result_generator = engine.generate(None,
-                                           sampling_params,
-                                           request_id,
-                                           prompt_token_ids=prompt)
+        # Don't keep the dummy data in memory
+        assert async_llm is not None
+        await async_llm.reset_mm_cache()
+
+        yield async_llm
+    finally:
+        if async_llm:
+            async_llm.shutdown()
+
+
+def build_app(
+    args: Namespace,
+    supported_tasks: tuple["SupportedTask", ...] | None = None,
+    model_config: ModelConfig | None = None,
+) -> FastAPI:
+    if supported_tasks is None:
+        warnings.warn(
+            "The 'supported_tasks' parameter was not provided to "
+            "build_app and will be required in a future version. "
+            "Defaulting to ('generate',).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        supported_tasks = _FALLBACK_SUPPORTED_TASKS
+
+    if args.disable_fastapi_docs:
+        app = FastAPI(
+            openapi_url=None, docs_url=None, redoc_url=None, lifespan=lifespan
+        )
+    elif args.enable_offline_docs:
+        app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
     else:
-        result_generator = engine.generate(prompt, sampling_params, request_id,
-                                           token_ids)
+        app = FastAPI(lifespan=lifespan)
+    app.state.args = args
 
-    # Similar to the OpenAI API, when n != best_of, we do not stream the
-    # results. In addition, we do not stream the results when use beam search.
-    stream = (request.stream
-              and (request.best_of is None or request.n == request.best_of)
-              and not request.use_beam_search)
+    from vllm.entrypoints.serve import register_vllm_serve_api_routers
 
-    def create_stream_response_json(
-        index: int,
-        text: str,
-        logprobs: Optional[LogProbs] = None,
-        finish_reason: Optional[str] = None,
-        usage: Optional[UsageInfo] = None,
-    ) -> str:
-        choice_data = CompletionResponseStreamChoice(
-            index=index,
-            text=text,
-            logprobs=logprobs,
-            finish_reason=finish_reason,
-        )
-        response = CompletionStreamResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            choices=[choice_data],
-        )
-        if usage is not None:
-            response.usage = usage
-        response_json = response.json(exclude_unset=True, ensure_ascii=False)
+    register_vllm_serve_api_routers(app)
 
-        return response_json
-
-    async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        previous_texts = [""] * request.n
-        previous_num_tokens = [0] * request.n
-        has_echoed = [False] * request.n
-        async for res in result_generator:
-            res: RequestOutput
-            for output in res.outputs:
-                i = output.index
-                delta_text = output.text[len(previous_texts[i]):]
-                token_ids = output.token_ids[previous_num_tokens[i]:]
-                if request.logprobs is not None:
-                    top_logprobs = output.logprobs[previous_num_tokens[i]:]
-                else:
-                    top_logprobs = None
-                offsets = len(previous_texts[i])
-                if request.echo and not has_echoed[i]:
-                    if not echo_without_generation:
-                        delta_text = res.prompt + delta_text
-                        token_ids = res.prompt_token_ids + token_ids
-                        if top_logprobs:
-                            top_logprobs = res.prompt_logprobs + top_logprobs
-                    else:  # only just return the prompt
-                        delta_text = res.prompt
-                        token_ids = res.prompt_token_ids
-                        if top_logprobs:
-                            top_logprobs = res.prompt_logprobs
-                    has_echoed[i] = True
-                if request.logprobs is not None:
-                    logprobs = create_logprobs(
-                        token_ids=token_ids,
-                        top_logprobs=top_logprobs,
-                        num_output_top_logprobs=request.logprobs,
-                        initial_text_offset=offsets,
-                    )
-                else:
-                    logprobs = None
-                previous_texts[i] = output.text
-                previous_num_tokens[i] = len(output.token_ids)
-                finish_reason = output.finish_reason
-                response_json = create_stream_response_json(
-                    index=i,
-                    text=delta_text,
-                    logprobs=logprobs,
-                    finish_reason=finish_reason,
-                )
-                yield f"data: {response_json}\n\n"
-                if output.finish_reason is not None:
-                    logprobs = (LogProbs()
-                                if request.logprobs is not None else None)
-                    prompt_tokens = len(res.prompt_token_ids)
-                    completion_tokens = len(output.token_ids)
-                    final_usage = UsageInfo(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=prompt_tokens + completion_tokens,
-                    )
-                    response_json = create_stream_response_json(
-                        index=i,
-                        text="",
-                        logprobs=logprobs,
-                        finish_reason=output.finish_reason,
-                        usage=final_usage,
-                    )
-                    yield f"data: {response_json}\n\n"
-        yield "data: [DONE]\n\n"
-
-    # Streaming response
-    if stream:
-        return StreamingResponse(completion_stream_generator(),
-                                 media_type="text/event-stream")
-
-    # Non-streaming response
-    final_res: RequestOutput = None
-    async for res in result_generator:
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            await engine.abort(request_id)
-            return create_error_response(HTTPStatus.BAD_REQUEST,
-                                         "Client disconnected")
-        final_res = res
-    assert final_res is not None
-    choices = []
-    prompt_token_ids = final_res.prompt_token_ids
-    prompt_logprobs = final_res.prompt_logprobs
-    prompt_text = final_res.prompt
-    for output in final_res.outputs:
-        if request.logprobs is not None:
-            if not echo_without_generation:
-                token_ids = output.token_ids
-                top_logprobs = output.logprobs
-                if request.echo:
-                    token_ids = prompt_token_ids + token_ids
-                    top_logprobs = prompt_logprobs + top_logprobs
-            else:
-                token_ids = prompt_token_ids
-                top_logprobs = prompt_logprobs
-            logprobs = create_logprobs(
-                token_ids=token_ids,
-                top_logprobs=top_logprobs,
-                num_output_top_logprobs=request.logprobs,
-            )
-        else:
-            logprobs = None
-        if not echo_without_generation:
-            output_text = output.text
-            if request.echo:
-                output_text = prompt_text + output_text
-        else:
-            output_text = prompt_text
-        choice_data = CompletionResponseChoice(
-            index=output.index,
-            text=output_text,
-            logprobs=logprobs,
-            finish_reason=output.finish_reason,
-        )
-        choices.append(choice_data)
-
-    num_prompt_tokens = len(final_res.prompt_token_ids)
-    num_generated_tokens = sum(
-        len(output.token_ids) for output in final_res.outputs)
-    usage = UsageInfo(
-        prompt_tokens=num_prompt_tokens,
-        completion_tokens=num_generated_tokens,
-        total_tokens=num_prompt_tokens + num_generated_tokens,
-    )
-    response = CompletionResponse(
-        id=request_id,
-        created=created_time,
-        model=model_name,
-        choices=choices,
-        usage=usage,
+    from vllm.entrypoints.openai.models.api_router import (
+        attach_router as register_models_api_router,
     )
 
-    if request.stream:
-        # When user requests streaming but we don't stream, we still need to
-        # return a streaming response with a single event.
-        response_json = response.json(ensure_ascii=False)
+    register_models_api_router(app)
 
-        async def fake_stream_generator() -> AsyncGenerator[str, None]:
-            yield f"data: {response_json}\n\n"
-            yield "data: [DONE]\n\n"
+    from vllm.entrypoints.sagemaker.api_router import (
+        attach_router as register_sagemaker_api_router,
+    )
 
-        return StreamingResponse(fake_stream_generator(),
-                                 media_type="text/event-stream")
+    register_sagemaker_api_router(app, supported_tasks, model_config)
 
-    return response
+    if "generate" in supported_tasks:
+        from vllm.entrypoints.openai.generate.api_router import (
+            register_generate_api_routers,
+        )
 
+        register_generate_api_routers(app)
 
-if __name__ == "__main__":
-    args = parse_args()
+        from vllm.entrypoints.serve.disagg.api_router import (
+            attach_router as attach_disagg_router,
+        )
 
+        attach_disagg_router(app)
+
+        from vllm.entrypoints.serve.rlhf.api_router import (
+            attach_router as attach_rlhf_router,
+        )
+
+        attach_rlhf_router(app)
+
+        from vllm.entrypoints.serve.elastic_ep.api_router import (
+            attach_router as elastic_ep_attach_router,
+        )
+
+        elastic_ep_attach_router(app)
+
+        from vllm.entrypoints.openai.generative_scoring.api_router import (
+            register_generative_scoring_api_router,
+        )
+
+        register_generative_scoring_api_router(app)
+
+    if "generate" in supported_tasks or "render" in supported_tasks:
+        from vllm.entrypoints.serve.render.api_router import (
+            attach_router as attach_render_router,
+        )
+
+        attach_render_router(app)
+
+    if "transcription" in supported_tasks:
+        from vllm.entrypoints.openai.speech_to_text.api_router import (
+            attach_router as register_speech_to_text_api_router,
+        )
+
+        register_speech_to_text_api_router(app)
+
+    if "realtime" in supported_tasks:
+        from vllm.entrypoints.openai.realtime.api_router import (
+            attach_router as register_realtime_api_router,
+        )
+
+        register_realtime_api_router(app)
+
+    if any(task in POOLING_TASKS for task in supported_tasks):
+        from vllm.entrypoints.pooling.factories import register_pooling_api_routers
+
+        register_pooling_api_routers(app, supported_tasks, model_config)
+
+    app.root_path = args.root_path
     app.add_middleware(
         CORSMiddleware,
         allow_origins=args.allowed_origins,
@@ -724,34 +261,473 @@ if __name__ == "__main__":
         allow_headers=args.allowed_headers,
     )
 
-    logger.info(f"args: {args}")
+    app.exception_handler(HTTPException)(http_exception_handler)
+    app.exception_handler(RequestValidationError)(validation_exception_handler)
+    app.exception_handler(EngineGenerateError)(engine_error_handler)
+    app.exception_handler(EngineDeadError)(engine_error_handler)
+    app.exception_handler(GenerationError)(generation_error_handler)
+    app.exception_handler(Exception)(exception_handler)
+
+    # Ensure --api-key option from CLI takes precedence over VLLM_API_KEY
+    if tokens := [key for key in (args.api_key or [envs.VLLM_API_KEY]) if key]:
+        from vllm.entrypoints.openai.server_utils import AuthenticationMiddleware
+
+        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
+    if args.enable_request_id_headers:
+        from vllm.entrypoints.openai.server_utils import XRequestIdMiddleware
+
+        app.add_middleware(XRequestIdMiddleware)
+
+    # Add scaling middleware to check for scaling state
+    app.add_middleware(ScalingMiddleware)
+
+    if "realtime" in supported_tasks:
+        # Add WebSocket metrics middleware
+        from vllm.entrypoints.openai.realtime.metrics import (
+            WebSocketMetricsMiddleware,
+        )
+
+        app.add_middleware(WebSocketMetricsMiddleware)
+
+    if envs.VLLM_DEBUG_LOG_API_SERVER_RESPONSE:
+        logger.warning(
+            "CAUTION: Enabling log response in the API Server. "
+            "This can include sensitive information and should be "
+            "avoided in production."
+        )
+        app.middleware("http")(log_response)
+
+    for middleware in args.middleware:
+        module_path, object_name = middleware.rsplit(".", 1)
+        imported = getattr(importlib.import_module(module_path), object_name)
+        if inspect.isclass(imported):
+            app.add_middleware(imported)  # type: ignore[arg-type]
+        elif inspect.iscoroutinefunction(imported):
+            app.middleware("http")(imported)
+        else:
+            raise ValueError(
+                f"Invalid middleware {middleware}. Must be a function or a class."
+            )
+
+    app = sagemaker_standards_bootstrap(app)
+    return app
+
+
+async def init_app_state(
+    engine_client: EngineClient,
+    state: State,
+    args: Namespace,
+    supported_tasks: tuple["SupportedTask", ...] | None = None,
+) -> None:
+    vllm_config = engine_client.vllm_config
+
+    # Propagate enable_in_reasoning to the API-server process. The engine core
+    # runs in a separate process, so the contextvar that backs
+    # `get_current_vllm_config_or_none()` is None on this stack. Tool parsers
+    # call `get_enable_structured_outputs_in_reasoning()` during request
+    # handling and need to see the real flag, otherwise they silently fall
+    # back to False and mismatch the engine-side bitmask gating.
+    from vllm.tool_parsers.structural_tag_registry import (
+        set_enable_structured_outputs_in_reasoning,
+    )
+
+    set_enable_structured_outputs_in_reasoning(
+        vllm_config.structured_outputs_config.enable_in_reasoning
+    )
+
+    if supported_tasks is None:
+        warnings.warn(
+            "The 'supported_tasks' parameter was not provided to "
+            "init_app_state and will be required in a future version. "
+            "Please pass 'supported_tasks' explicitly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        supported_tasks = _FALLBACK_SUPPORTED_TASKS
 
     if args.served_model_name is not None:
-        served_model = args.served_model_name
+        served_model_names = args.served_model_name
     else:
-        served_model = args.model
+        served_model_names = [args.model]
 
-    response_role = args.response_role
+    if args.enable_log_requests:
+        request_logger = RequestLogger(max_log_len=args.max_log_len)
+    else:
+        request_logger = None
 
-    engine_args = AsyncEngineArgs.from_cli_args(args)
-    engine = AsyncLLMEngine.from_engine_args(engine_args)
-    engine_model_config = asyncio.run(engine.get_model_config())
-    max_model_len = engine_model_config.max_model_len
+    base_model_paths = [
+        BaseModelPath(name=name, model_path=args.model) for name in served_model_names
+    ]
 
-    # A separate tokenizer to map token IDs to strings.
-    tokenizer = get_tokenizer(
-        engine_model_config.tokenizer,
-        tokenizer_mode=engine_model_config.tokenizer_mode,
-        trust_remote_code=engine_model_config.trust_remote_code)
-    load_chat_template(args, tokenizer)
+    state.engine_client = engine_client
+    state.log_stats = not args.disable_log_stats
+    state.vllm_config = vllm_config
+    state.args = args
+    resolved_chat_template = load_chat_template(args.chat_template)
 
-    # Register labels for metrics
-    add_global_metrics_labels(model_name=engine_args.model)
+    # Merge default_mm_loras into the static lora_modules
+    default_mm_loras = (
+        vllm_config.lora_config.default_mm_loras
+        if vllm_config.lora_config is not None
+        else {}
+    )
+    lora_modules = process_lora_modules(args.lora_modules, default_mm_loras)
 
-    uvicorn.run(app,
-                host=args.host,
-                port=args.port,
-                log_level="info",
-                timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
-                ssl_keyfile=args.ssl_keyfile,
-                ssl_certfile=args.ssl_certfile)
+    state.openai_serving_models = OpenAIServingModels(
+        engine_client=engine_client,
+        base_model_paths=base_model_paths,
+        lora_modules=lora_modules,
+    )
+    await state.openai_serving_models.init_static_loras()
+
+    state.openai_serving_render = OpenAIServingRender(
+        model_config=engine_client.model_config,
+        renderer=engine_client.renderer,
+        model_registry=state.openai_serving_models.registry,
+        request_logger=request_logger,
+        chat_template=resolved_chat_template,
+        chat_template_content_format=args.chat_template_content_format,
+        trust_request_chat_template=args.trust_request_chat_template,
+        enable_auto_tools=args.enable_auto_tool_choice,
+        exclude_tools_when_tool_choice_none=args.exclude_tools_when_tool_choice_none,
+        tool_parser=args.tool_call_parser,
+        reasoning_parser=args.structured_outputs_config.reasoning_parser,
+        default_chat_template_kwargs=args.default_chat_template_kwargs,
+        log_error_stack=args.log_error_stack,
+    )
+
+    state.openai_serving_tokenization = OpenAIServingTokenization(
+        engine_client,
+        state.openai_serving_models,
+        state.openai_serving_render,
+        request_logger=request_logger,
+        chat_template=resolved_chat_template,
+        chat_template_content_format=args.chat_template_content_format,
+        default_chat_template_kwargs=args.default_chat_template_kwargs,
+        trust_request_chat_template=args.trust_request_chat_template,
+    )
+
+    if "generate" in supported_tasks:
+        from vllm.entrypoints.openai.generate.api_router import init_generate_state
+
+        await init_generate_state(
+            engine_client, state, args, request_logger, supported_tasks
+        )
+
+        from vllm.entrypoints.openai.generative_scoring.api_router import (
+            init_generative_scoring_state,
+        )
+
+        await init_generative_scoring_state(engine_client, state, args, request_logger)
+
+    if "transcription" in supported_tasks:
+        from vllm.entrypoints.openai.speech_to_text.api_router import (
+            init_transcription_state,
+        )
+
+        init_transcription_state(
+            engine_client, state, args, request_logger, supported_tasks
+        )
+
+    if "realtime" in supported_tasks:
+        from vllm.entrypoints.openai.realtime.api_router import init_realtime_state
+
+        init_realtime_state(engine_client, state, args, request_logger, supported_tasks)
+
+    if any(task in POOLING_TASKS for task in supported_tasks):
+        from vllm.entrypoints.pooling.factories import init_pooling_state
+
+        init_pooling_state(engine_client, state, args, request_logger, supported_tasks)
+
+    state.enable_server_load_tracking = args.enable_server_load_tracking
+    state.server_load_metrics = 0
+
+
+async def init_render_app_state(
+    vllm_config: VllmConfig,
+    state: State,
+    args: Namespace,
+) -> None:
+    """Initialise FastAPI app state for a CPU-only render server.
+
+    Unlike :func:`init_app_state` this function does not require an
+    :class:`~vllm.engine.protocol.EngineClient`; it bootstraps the
+    preprocessing pipeline (renderer, input_processor)
+    directly from the :class:`~vllm.config.VllmConfig`.
+    """
+    from vllm.entrypoints.chat_utils import load_chat_template
+    from vllm.entrypoints.openai.models.serving import OpenAIModelRegistry
+    from vllm.entrypoints.serve.render.serving import OpenAIServingRender
+    from vllm.renderers import renderer_from_config
+
+    served_model_names = args.served_model_name or [args.model]
+    model_registry = OpenAIModelRegistry(
+        model_config=vllm_config.model_config,
+        base_model_paths=[
+            BaseModelPath(name=name, model_path=args.model)
+            for name in served_model_names
+        ],
+    )
+
+    if args.enable_log_requests:
+        request_logger = RequestLogger(max_log_len=args.max_log_len)
+    else:
+        request_logger = None
+
+    renderer = renderer_from_config(vllm_config)
+    resolved_chat_template = load_chat_template(args.chat_template)
+
+    state.openai_serving_render = OpenAIServingRender(
+        model_config=vllm_config.model_config,
+        renderer=renderer,
+        model_registry=model_registry,
+        request_logger=request_logger,
+        chat_template=resolved_chat_template,
+        chat_template_content_format=args.chat_template_content_format,
+        trust_request_chat_template=args.trust_request_chat_template,
+        enable_auto_tools=args.enable_auto_tool_choice,
+        exclude_tools_when_tool_choice_none=args.exclude_tools_when_tool_choice_none,
+        tool_parser=args.tool_call_parser,
+        reasoning_parser=args.structured_outputs_config.reasoning_parser,
+        default_chat_template_kwargs=args.default_chat_template_kwargs,
+        log_error_stack=args.log_error_stack,
+    )
+
+    state.openai_serving_models = model_registry
+
+    # Expose tokenization via the render handler (no engine required).
+    state.openai_serving_tokenization = state.openai_serving_render
+
+    state.vllm_config = vllm_config
+    # Disable stats logging — there is no engine to poll.
+    state.log_stats = False
+    state.engine_client = None
+    state.args = args
+    state.enable_server_load_tracking = False
+    state.server_load_metrics = 0
+
+
+def create_server_socket(addr: tuple[str, int]) -> socket.socket:
+    family = socket.AF_INET
+    if is_valid_ipv6_address(addr[0]):
+        family = socket.AF_INET6
+
+    sock = socket.socket(family=family, type=socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.bind(addr)
+
+    return sock
+
+
+def create_server_unix_socket(path: str) -> socket.socket:
+    sock = socket.socket(family=socket.AF_UNIX, type=socket.SOCK_STREAM)
+    sock.bind(path)
+    return sock
+
+
+def validate_api_server_args(args):
+    valid_tool_parses = ToolParserManager.list_registered()
+    if args.enable_auto_tool_choice and args.tool_call_parser not in valid_tool_parses:
+        raise KeyError(
+            f"invalid tool call parser: {args.tool_call_parser} "
+            f"(chose from {{ {','.join(valid_tool_parses)} }})"
+        )
+
+    valid_reasoning_parsers = ReasoningParserManager.list_registered()
+    if (
+        reasoning_parser := args.structured_outputs_config.reasoning_parser
+    ) and reasoning_parser not in valid_reasoning_parsers:
+        raise KeyError(
+            f"invalid reasoning parser: {reasoning_parser} "
+            f"(chose from {{ {','.join(valid_reasoning_parsers)} }})"
+        )
+
+
+@instrument(span_name="API server setup")
+def setup_server(args):
+    """Validate API server args, set up signal handler, create socket
+    ready to serve."""
+
+    log_version_and_model(logger, VLLM_VERSION, args.model)
+    log_non_default_args(args)
+
+    if args.tool_parser_plugin and len(args.tool_parser_plugin) > 3:
+        ToolParserManager.import_tool_parser(args.tool_parser_plugin)
+
+    if args.reasoning_parser_plugin and len(args.reasoning_parser_plugin) > 3:
+        ReasoningParserManager.import_reasoning_parser(args.reasoning_parser_plugin)
+
+    validate_api_server_args(args)
+
+    # workaround to make sure that we bind the port before the engine is set up.
+    # This avoids race conditions with ray.
+    # see https://github.com/vllm-project/vllm/issues/8204
+    if args.uds:
+        sock = create_server_unix_socket(args.uds)
+    else:
+        sock_addr = (args.host or "", args.port)
+        sock = create_server_socket(sock_addr)
+
+    # workaround to avoid footguns where uvicorn drops requests with too
+    # many concurrent requests active
+    set_ulimit()
+
+    def signal_handler(*_) -> None:
+        # Interrupt server on sigterm while initializing
+        raise KeyboardInterrupt("terminated")
+
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    if args.uds:
+        listen_address = f"unix:{args.uds}"
+    else:
+        addr, port = sock_addr
+        is_ssl = args.ssl_keyfile and args.ssl_certfile
+        host_part = f"[{addr}]" if is_valid_ipv6_address(addr) else addr or "0.0.0.0"
+        listen_address = f"http{'s' if is_ssl else ''}://{host_part}:{port}"
+    return listen_address, sock
+
+
+async def build_and_serve(
+    engine_client: EngineClient,
+    listen_address: str,
+    sock: socket.socket,
+    args: Namespace,
+    **uvicorn_kwargs,
+) -> asyncio.Task:
+    """Build FastAPI app, initialize state, and start serving.
+
+    Returns the shutdown task for the caller to await.
+    """
+
+    # Get uvicorn log config (from file or with endpoint filter)
+    log_config = get_uvicorn_log_config(args)
+    if log_config is not None:
+        uvicorn_kwargs["log_config"] = log_config
+
+    supported_tasks = await engine_client.get_supported_tasks()
+    model_config = engine_client.model_config
+
+    logger.info("Supported tasks: %s", supported_tasks)
+    app = build_app(args, supported_tasks, model_config)
+    await init_app_state(engine_client, app.state, args, supported_tasks)
+
+    logger.info("Starting vLLM server on %s", listen_address)
+
+    return await serve_http(
+        app,
+        sock=sock,
+        enable_ssl_refresh=args.enable_ssl_refresh,
+        host=args.host,
+        port=args.port,
+        log_level=args.uvicorn_log_level,
+        # NOTE: When the 'disable_uvicorn_access_log' value is True,
+        # no access log will be output.
+        access_log=not args.disable_uvicorn_access_log,
+        timeout_keep_alive=envs.VLLM_HTTP_TIMEOUT_KEEP_ALIVE,
+        ssl_keyfile=args.ssl_keyfile,
+        ssl_certfile=args.ssl_certfile,
+        ssl_ca_certs=args.ssl_ca_certs,
+        ssl_cert_reqs=args.ssl_cert_reqs,
+        ssl_ciphers=args.ssl_ciphers,
+        h11_max_incomplete_event_size=args.h11_max_incomplete_event_size,
+        h11_max_header_count=args.h11_max_header_count,
+        **uvicorn_kwargs,
+    )
+
+
+async def build_and_serve_renderer(
+    vllm_config: VllmConfig,
+    listen_address: str,
+    sock: socket.socket,
+    args: Namespace,
+    **uvicorn_kwargs,
+) -> asyncio.Task:
+    """Build FastAPI app for a CPU-only render server, initialize state, and
+    start serving.
+
+    Returns the shutdown task for the caller to await.
+    """
+
+    # Get uvicorn log config (from file or with endpoint filter)
+    log_config = get_uvicorn_log_config(args)
+    if log_config is not None:
+        uvicorn_kwargs["log_config"] = log_config
+
+    app = build_app(args, ("render",))
+    await init_render_app_state(vllm_config, app.state, args)
+
+    logger.info("Starting vLLM server on %s", listen_address)
+
+    return await serve_http(
+        app,
+        sock=sock,
+        enable_ssl_refresh=args.enable_ssl_refresh,
+        host=args.host,
+        port=args.port,
+        log_level=args.uvicorn_log_level,
+        # NOTE: When the 'disable_uvicorn_access_log' value is True,
+        # no access log will be output.
+        access_log=not args.disable_uvicorn_access_log,
+        timeout_keep_alive=envs.VLLM_HTTP_TIMEOUT_KEEP_ALIVE,
+        ssl_keyfile=args.ssl_keyfile,
+        ssl_certfile=args.ssl_certfile,
+        ssl_ca_certs=args.ssl_ca_certs,
+        ssl_cert_reqs=args.ssl_cert_reqs,
+        ssl_ciphers=args.ssl_ciphers,
+        h11_max_incomplete_event_size=args.h11_max_incomplete_event_size,
+        h11_max_header_count=args.h11_max_header_count,
+        **uvicorn_kwargs,
+    )
+
+
+async def run_server(args, **uvicorn_kwargs) -> None:
+    """Run a single-worker API server."""
+
+    # Add process-specific prefix to stdout and stderr.
+    decorate_logs("APIServer")
+
+    listen_address, sock = setup_server(args)
+    await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+
+
+async def run_server_worker(
+    listen_address, sock, args, client_config=None, **uvicorn_kwargs
+) -> None:
+    """Run a single API server worker."""
+
+    if args.tool_parser_plugin and len(args.tool_parser_plugin) > 3:
+        ToolParserManager.import_tool_parser(args.tool_parser_plugin)
+
+    if args.reasoning_parser_plugin and len(args.reasoning_parser_plugin) > 3:
+        ReasoningParserManager.import_reasoning_parser(args.reasoning_parser_plugin)
+
+    async with build_async_engine_client(
+        args,
+        client_config=client_config,
+    ) as engine_client:
+        shutdown_task = await build_and_serve(
+            engine_client, listen_address, sock, args, **uvicorn_kwargs
+        )
+    # NB: Await server shutdown only after the backend context is exited
+    try:
+        await shutdown_task
+    finally:
+        sock.close()
+
+
+if __name__ == "__main__":
+    # NOTE(simon):
+    # This section should be in sync with vllm/entrypoints/cli/main.py for CLI
+    # entrypoints.
+    cli_env_setup()
+    parser = FlexibleArgumentParser(
+        description="vLLM OpenAI-Compatible RESTful API server."
+    )
+    parser = make_arg_parser(parser)
+    args = parser.parse_args()
+    validate_parsed_serve_args(args)
+
+    uvloop.run(run_server(args))
