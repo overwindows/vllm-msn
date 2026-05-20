@@ -100,7 +100,7 @@ echo "3. Checking Python environment..."
 echo ""
 
 # Activate conda
-source /root/miniconda3/bin/activate vllm 2>/dev/null || true
+source /root/miniconda3/bin/activate vllm-ablation 2>/dev/null || true
 
 python3 --version > /dev/null 2>&1
 check "Python 3 available"
@@ -229,11 +229,13 @@ if [ $ERRORS -eq 0 ]; then
     echo "  Single experiment: ./run_ablation_experiment.sh --exp E002 --batch 64 --fp8"
     echo "  All experiments:   ./run_all_ablation_experiments.sh"
     echo ""
-    echo "Optional: Create text-only model first"
-    echo "  python3 create_text_only_model.py \\"
-    echo "    --model_path /nvmedata/hf_checkpoints/gemma-4-26B-A4B-it \\"
-    echo "    --output_path /nvmedata/hf_checkpoints/gemma-4-26B-A4B-it-text-only"
-    echo ""
+    if [ ! -d "/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it-text-only" ]; then
+        echo "Note: text-only model not present — build it before E007–E014:"
+        echo "  python3 create_text_only_model.py \\"
+        echo "    --model_path /nvmedata/hf_checkpoints/gemma-4-26B-A4B-it \\"
+        echo "    --output_path /nvmedata/hf_checkpoints/gemma-4-26B-A4B-it-text-only"
+        echo ""
+    fi
     exit 0
 else
     echo -e "${RED}✗ ${ERRORS} error(s) found!${NC}"
