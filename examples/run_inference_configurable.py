@@ -196,9 +196,38 @@ async def main():
     # Get test prompts
     if args.input_path and Path(args.input_path).exists():
         logger.info(f"Loading prompts from {args.input_path}...")
-        # Simple: one prompt per line
-        with open(args.input_path) as f:
-            prompts = [line.strip() for line in f if line.strip()]
+        prompts = []
+
+        # Try to parse as JSONL first (vLLM format with messages field)
+        try:
+            with open(args.input_path) as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+
+                    # Extract messages field if present
+                    if 'messages' in data and isinstance(data['messages'], list):
+                        # Format messages for vLLM (system + user)
+                        prompt_parts = []
+                        for msg in data['messages']:
+                            role = msg.get('role', '')
+                            content = msg.get('content', '')
+                            if role == 'system':
+                                prompt_parts.append(f"System: {content}")
+                            elif role == 'user':
+                                prompt_parts.append(f"User: {content}")
+                        prompts.append("\n\n".join(prompt_parts))
+                    else:
+                        # Fallback: treat whole JSON as string
+                        prompts.append(json.dumps(data))
+
+            logger.info(f"  Loaded {len(prompts)} prompts from JSONL")
+        except json.JSONDecodeError:
+            # Not JSON, treat as plain text (one prompt per line)
+            with open(args.input_path) as f:
+                prompts = [line.strip() for line in f if line.strip()]
+            logger.info(f"  Loaded {len(prompts)} prompts from text file")
     else:
         logger.info(f"No input file, generating {args.num_test_samples} test prompts...")
         prompts = [

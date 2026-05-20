@@ -280,7 +280,8 @@ PYTHON_ARGS=(
     "--gpu_memory_utilization" "${GPU_MEM_UTIL}"
     "--dtype" "${DTYPE}"
     "--output_path" "${OUTPUT_DIR}/output.jsonl"
-    "--num_test_samples" "100"
+    "--input_path" "/nvmedata/data/layer1_delta_1k_test.txt"
+    "--num_test_samples" "1000"
 )
 
 # Quantization
