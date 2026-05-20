@@ -271,21 +271,25 @@ nvidia-smi > "${OUTPUT_DIR}/gpu_initial.txt"
 
 echo "Step 4: Building inference command..."
 
-PYTHON_CMD="python3 llm_analyzer_gemma4_moe_fp8_mtp.py"
+PYTHON_CMD="python3 run_inference_configurable.py"
 
 PYTHON_ARGS=(
     "--model_path" "${MODEL_PATH}"
-    "--batch_size" "${BATCH_SIZE}"
     "--max_num_seqs" "${BATCH_SIZE}"
     "--max_num_batched_tokens" "${MAX_BATCHED_TOKENS}"
     "--gpu_memory_utilization" "${GPU_MEM_UTIL}"
     "--dtype" "${DTYPE}"
+    "--output_path" "${OUTPUT_DIR}/output.jsonl"
+    "--num_test_samples" "100"
 )
 
 # Quantization
 if [ "$USE_FP8" = "true" ]; then
     PYTHON_ARGS+=("--quantization" "fp8")
     PYTHON_ARGS+=("--kv_cache_dtype" "${KV_CACHE_DTYPE}")
+else
+    # No quantization - explicitly set to None is handled by not passing it
+    :  # No-op
 fi
 
 # CUDA graphs
@@ -300,9 +304,6 @@ if [ "$USE_MTP" = "true" ]; then
     PYTHON_ARGS+=("--speculative_model" "${ASSISTANT_PATH}")
     PYTHON_ARGS+=("--num_speculative_tokens" "5")
 fi
-
-# Output
-PYTHON_ARGS+=("--output_path" "${OUTPUT_DIR}/output.jsonl")
 
 echo "  Command: ${PYTHON_CMD}"
 echo "  Arguments:"
