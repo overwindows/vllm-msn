@@ -23,8 +23,8 @@ export VLLM_USE_FLASHINFER_MOE_FP8=1
 # Options: auto, triton, deep_gemm (for FP8), flashinfer_cutlass
 export VLLM_MOE_BACKEND=auto
 
-# Model Configuration
-MODEL_PATH=/nvmedata/hf_checkpoints/gemma-2-27b-it  # Update to your Gemma 4 26B path
+# Model Configuration - Gemma 4 26B MoE (A4B variant)
+MODEL_PATH=/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it
 
 # A100 40GB Memory Optimization:
 # - Use FP8 quantization for weights and KV cache
