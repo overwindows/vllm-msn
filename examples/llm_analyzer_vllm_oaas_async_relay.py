@@ -168,7 +168,7 @@ class VLLMOAAS:
         tokens = self.tokenizer.encode(SYSTEM_PROMPT)
         print(f"System prompt token count: {len(tokens)}")
         
-        # Initialize Async Engine - Optimized for A100 80GB
+        # Initialize Async Engine - Optimized for A100 80GB + MoE models
         # Note: relay attention parameters (enable_relay_attention, sys_prompt, sys_schema)
         # are not available in vLLM 0.10.1 - these features may require a newer version
         engine_args = AsyncEngineArgs(
@@ -190,6 +190,8 @@ class VLLMOAAS:
             enforce_eager=False,  # Allow CUDA graphs for better performance
             # A100-specific: compilation is beneficial
             # compilation_config will use defaults which work well on A100
+            # Note: For MoE models (like Gemma 4), use FLASH_ATTN backend (set via env var)
+            # instead of FLASHINFER for better stability on A100
         )
         self.engine = AsyncLLMEngine.from_engine_args(engine_args)
 

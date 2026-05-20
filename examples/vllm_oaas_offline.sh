@@ -8,11 +8,11 @@ export VLLM_LOG_LEVEL="ERROR"
 export PYTHONUNBUFFERED=1
 # run these in the same shell that starts vLLM
 export TORCH_CUDA_ARCH_LIST="8.0"      # A100 architecture
-# A100 Optimization: Use FLASHINFER for best performance
-export VLLM_ATTENTION_BACKEND=FLASHINFER
-# Alternative: FLASH_ATTN (if FLASHINFER has issues)
-# export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-# Or leave unset for autodetect
+# A100 + MoE Optimization: Use FLASH_ATTN (best for Gemma 4 MoE)
+export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+# Note: FLASHINFER is better for non-MoE models on A100
+# For MoE models like Gemma 4, FLASH_ATTN is more stable and performant
+# Or leave unset for autodetect (will choose FLASH_ATTN on A100)
 
 
 # MODEL_PATH=/nvmedata/hf_checkpoints/Qwen3-8B/
