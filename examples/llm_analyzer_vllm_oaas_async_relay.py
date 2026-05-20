@@ -19,14 +19,11 @@ import csv
 import asyncio
 from transformers import AutoTokenizer
 from vllm import AsyncLLMEngine, SamplingParams, AsyncEngineArgs
-import json
 import logging
-import time
 import datetime
 from typing import List, Dict, Any, Callable, AsyncGenerator
 import pandas as pd
 import tqdm
-import torch
 from uuid import uuid4
 import argparse
 
@@ -291,8 +288,6 @@ async def analyze_user_history(user_profile: Dict, llm_caller: Callable) -> List
         # Extract JSON from the content
         json_str = content
 
-        return []
-        
         if "```json" in content:
             json_str = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
