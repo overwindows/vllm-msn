@@ -7,11 +7,12 @@ export LOGURU_LEVEL="ERROR"
 export VLLM_LOG_LEVEL="ERROR"
 export PYTHONUNBUFFERED=1
 # run these in the same shell that starts vLLM
-export TORCH_CUDA_ARCH_LIST="8.0"      # any arch ≤ 9.0 works
-# export VLLM_ATTENTION_BACKEND=FLASHINFER   # autodetect also fine
-# Use FLASH_ATTN instead of FLASHINFER for better CUDA 12.9 compatibility
+export TORCH_CUDA_ARCH_LIST="8.0"      # A100 architecture
+# A100 Optimization: Use FLASHINFER for best performance
+export VLLM_ATTENTION_BACKEND=FLASHINFER
+# Alternative: FLASH_ATTN (if FLASHINFER has issues)
 # export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-# If FLASH_ATTN still has issues, comment out the line above to use default backend
+# Or leave unset for autodetect
 
 
 # MODEL_PATH=/nvmedata/hf_checkpoints/Qwen3-8B/

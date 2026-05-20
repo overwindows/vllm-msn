@@ -168,25 +168,28 @@ class VLLMOAAS:
         tokens = self.tokenizer.encode(SYSTEM_PROMPT)
         print(f"System prompt token count: {len(tokens)}")
         
-        # Initialize Async Engine
+        # Initialize Async Engine - Optimized for A100 80GB
         # Note: relay attention parameters (enable_relay_attention, sys_prompt, sys_schema)
         # are not available in vLLM 0.10.1 - these features may require a newer version
         engine_args = AsyncEngineArgs(
             model=model_path,
             trust_remote_code=True,
-            tensor_parallel_size=1,
+            tensor_parallel_size=1,  # Increase to 2 or 4 when using dedicated GPUs
             dtype="bfloat16",
-            gpu_memory_utilization=0.5,  # Reduced from 0.95 to fit shared GPU
-            # Increase max_num_batched_tokens to match or exceed max_model_len
-            max_num_batched_tokens=8192,
-            max_num_seqs=512,
+            gpu_memory_utilization=0.5,  # Increase to 0.9 when GPU is dedicated
+            # A100 optimization: larger batches for better throughput
+            max_num_batched_tokens=16384,  # Increased from 8192
+            max_num_seqs=1024,  # Increased from 512 for better batching
             swap_space=8,
             disable_log_stats=True,
-            enable_log_requests=False,  # Changed from disable_log_requests
-            # Add additional parameters for better performance
-            max_model_len=4096,  # Set a reasonable max model length
-            quantization=None,  # Disable quantization for better compatibility
-            # enforce_eager=True  # Enable eager mode for better debugging
+            enable_log_requests=False,
+            max_model_len=4096,
+            quantization=None,  # Set to "fp8" for more aggressive memory savings
+            kv_cache_dtype="auto",  # Can use "fp8" on A100 for more capacity
+            enable_prefix_caching=True,  # Optimize repeated system prompts (default in v0.21+)
+            enforce_eager=False,  # Allow CUDA graphs for better performance
+            # A100-specific: compilation is beneficial
+            # compilation_config will use defaults which work well on A100
         )
         self.engine = AsyncLLMEngine.from_engine_args(engine_args)
 
