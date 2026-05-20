@@ -198,7 +198,7 @@ class VLLMOAAS:
         )
 
         # Semaphore to limit concurrent requests
-        self.semaphore = asyncio.Semaphore(8)
+        self.semaphore = asyncio.Semaphore(64)
 
     async def __call__(self, messages: Dict) -> Dict:
         """

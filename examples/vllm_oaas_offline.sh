@@ -1,5 +1,4 @@
-# CUDA_VISIBLE_DEVICES=3 python3 vllm_oaas.py
-# CUDA_VISIBLE_DEVICES=3 python3 vllm_oaas_async.py
+
 VLLM_CMD=llm_analyzer_vllm_oaas_async_relay.py
 # VLLM_CMD=llm_analyzer_vllm_oaas_async.py
 
@@ -20,7 +19,7 @@ export TORCH_CUDA_ARCH_LIST="8.0"      # any arch ≤ 9.0 works
 # MODEL_PATH=/nvmedata/hf_checkpoints/Qwen3-8B/
 MODEL_PATH=/nvmedata/hf_checkpoints/Llama-2-7b-chat-hf-bf16
 
-CUDA_VISIBLE_DEVICES=2,3 python3 $VLLM_CMD \
+CUDA_VISIBLE_DEVICES=2,3 PYTHONPATH=/nvmedata/chenw/vllm-ra python3 $VLLM_CMD \
     --input_path /nvmedata/chenw/genz/genz_users_20k_format.tsv \
     --output_path /nvmedata/chenw/genz/genz_users_interests_vllm_oaas_async.jsonl \
     --model_path $MODEL_PATH \
