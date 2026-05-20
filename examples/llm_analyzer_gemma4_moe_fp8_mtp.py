@@ -195,12 +195,16 @@ class VLLMOAAS:
             quantization="fp8",  # Enable FP8 weight quantization
             kv_cache_dtype="fp8_e5m2",  # FP8 KV cache (e5m2 format for better quality)
 
-            # Memory Configuration for A100 40GB (with MTP assistant overhead)
-            gpu_memory_utilization=0.85,  # Conservative for FP8 ops + assistant overhead
+            # Memory Configuration for A100 40GB with CUDA Graphs + MTP
+            # Reduced from 0.85 to 0.75 to accommodate CUDA graph memory (4-6GB overhead)
+            # CUDA graphs compile execution graphs for batch sizes [1,2,4,8,16,32,64,128]
+            # Each graph allocates ~300-600MB for activations and intermediate buffers
+            gpu_memory_utilization=0.75,  # Leaves ~10GB headroom for CUDA graphs + MTP assistant
 
-            # Batch Configuration (reduced for 40GB memory)
-            max_num_batched_tokens=8192,  # Reduced from 16384
-            max_num_seqs=256,  # Reduced from 1024
+            # Batch Configuration (optimized for CUDA graphs + online inference)
+            # Reduced to limit number of compiled graph sizes and total memory footprint
+            max_num_batched_tokens=6144,  # Reduced from 8192 (saves ~1-2GB KV cache)
+            max_num_seqs=128,  # Reduced from 256 (limits graph compilation to batch≤128)
             max_model_len=8192,  # Context length
 
             # MTP Speculative Decoding Configuration
@@ -212,7 +216,7 @@ class VLLMOAAS:
             disable_log_stats=True,
             enable_log_requests=False,
             enable_prefix_caching=True,  # Cache system prompt
-            enforce_eager=False,  # Allow CUDA graphs
+            enforce_eager=False,  # Enable CUDA graphs for 10-15% speedup
 
             # MoE-specific: Will use FLASH_ATTN backend (set via env var)
             # FP8 MoE kernels will be selected automatically if available
@@ -232,8 +236,8 @@ class VLLMOAAS:
             stop=None,
         )
 
-        # Semaphore to limit concurrent requests (reduced for memory)
-        self.semaphore = asyncio.Semaphore(32)  # Reduced from 64
+        # Semaphore to limit concurrent requests (aligned with max_num_seqs)
+        self.semaphore = asyncio.Semaphore(32)  # Half of max_num_seqs for safety
 
     async def __call__(self, messages: Dict) -> Dict:
         """

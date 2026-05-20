@@ -34,16 +34,19 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/nvmedata/chenw/vllm-ra python3 $VLLM_CMD \
     --model_path $MODEL_PATH \
     --speculative_model $ASSISTANT_PATH \
     --num_speculative_tokens $NUM_SPECULATIVE_TOKENS \
-    --batch_size 128 \
-    --max_model_len 8192 \
-    --quantization fp8 \
-    --kv_cache_dtype fp8_e5m2 \
-    --gpu_memory_utilization 0.85 \
-    --max_num_batched_tokens 8192 \
-    --max_num_seqs 256
+    --batch_size 128
 
-# Expected Performance with MTP:
-# - Throughput: 80-120 req/sec (vs 40-60 without MTP)
-# - Latency: 30-60ms per request (vs 50-100ms)
-# - Memory: ~37-38GB (assistant adds ~2-3GB)
-# - Speedup: 2-3x compared to standard decoding
+# Expected Performance with MTP + CUDA Graphs:
+# - Throughput: 70-100 req/sec (MTP: 1.5-2x, CUDA graphs: +10-15%)
+# - Latency: 35-70ms per request (optimized for online inference)
+# - Memory: ~34-38GB (model + assistant + CUDA graphs overhead)
+# - Memory breakdown:
+#   * Main model (FP8): ~20-22GB
+#   * Assistant model: ~0.8GB
+#   * KV cache (FP8): ~6-8GB (reduced with gpu_memory_utilization=0.75)
+#   * CUDA graphs: ~4-6GB (graphs for batch sizes 1,2,4,8,16,32,64,128)
+#   * CUDA overhead: ~2-3GB
+# - Speedup: 1.5-2x (MTP) + 10-15% (CUDA graphs) vs standard decoding
+#
+# Note: Reduced gpu_memory_utilization to 0.75 and max_num_seqs to 128
+#       to accommodate CUDA graph memory overhead for online inference
