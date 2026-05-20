@@ -80,8 +80,13 @@ Summarized topics from user browsing and search history (order by recency and st
 {interests_list}
 
 """
+    # Include system prompt as a system message since relay attention is not available
     return {
         "messages": [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            },
             {
                 "role": "user",
                 "content": prompt_content
@@ -151,8 +156,9 @@ If no high-confidence interests can be determined, return "can't infer".
 """
 
 class VLLMOAAS:
-    def __init__(self, model_path: str = "/nvmedata/hf_checkpoints/Qwen3-32B/", 
+    def __init__(self, model_path: str = "/nvmedata/hf_checkpoints/Qwen3-32B/",
                  enable_relay_attention: bool = True):
+        # Note: enable_relay_attention parameter is accepted but ignored in vLLM 0.10.1
         self.device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {self.device}")
@@ -162,7 +168,9 @@ class VLLMOAAS:
         tokens = self.tokenizer.encode(SYSTEM_PROMPT)
         print(f"System prompt token count: {len(tokens)}")
         
-        # Initialize Async Engine with relay attention support
+        # Initialize Async Engine
+        # Note: relay attention parameters (enable_relay_attention, sys_prompt, sys_schema)
+        # are not available in vLLM 0.10.1 - these features may require a newer version
         engine_args = AsyncEngineArgs(
             model=model_path,
             trust_remote_code=True,
@@ -174,12 +182,7 @@ class VLLMOAAS:
             max_num_seqs=512,
             swap_space=8,
             disable_log_stats=True,
-            disable_log_requests=True,
-            # Add relay attention parameter (correct parameter name)
-            enable_relay_attention=enable_relay_attention,
-            # Add system prompt for relay attention
-            sys_prompt=SYSTEM_PROMPT,
-            sys_schema="<<SYS>>\n{__SYS_PROMPT}\n<</SYS>>\n\n{__USR_PROMPT}",
+            enable_log_requests=False,  # Changed from disable_log_requests
             # Add additional parameters for better performance
             max_model_len=4096,  # Set a reasonable max model length
             quantization=None,  # Disable quantization for better compatibility
