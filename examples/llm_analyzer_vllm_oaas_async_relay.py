@@ -169,7 +169,7 @@ class VLLMOAAS:
         engine_args = AsyncEngineArgs(
             model=model_path,
             trust_remote_code=True,
-            tensor_parallel_size=2,
+            tensor_parallel_size=1,
             dtype="bfloat16",
             gpu_memory_utilization=0.95,
             # Increase max_num_batched_tokens to match or exceed max_model_len
