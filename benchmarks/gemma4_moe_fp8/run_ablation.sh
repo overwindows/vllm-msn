@@ -64,31 +64,34 @@ fi
 # ---------------------------------------------------------------------------
 # Per-experiment environment variable table.
 # These must be set BEFORE vllm is imported, so this shell wrapper is the
-# right place (bench_ablation.py also cross-checks and warns on mismatch).
+# right place.
+#
+# NOTE: Gemma 4 has heterogeneous attention head dims (256 and 512), so vLLM
+# forces TRITON_ATTN regardless of VLLM_ATTENTION_BACKEND.  The env var is
+# set here only so it appears in logs for reproducibility — it has no runtime
+# effect on this model.
 #
 # Mapping:
-#   VLLM_ATTENTION_BACKEND          : FLASH_ATTN | FLASHINFER
+#   VLLM_ATTENTION_BACKEND          : FLASH_ATTN (default, all exps)
 #   VLLM_USE_FLASHINFER_MOE_FP8     : 0 | 1  (H100 only; A100 must use 0)
 #   VLLM_USE_FLASHINFER_SAMPLER     : 0 | 1  (JIT compile fix for old nvcc)
 # ---------------------------------------------------------------------------
 set_env_for_exp() {
   local exp="$1"
-  # Default: safe values
+  # Default: safe values for all experiments
   export VLLM_ATTENTION_BACKEND="FLASH_ATTN"
-  export VLLM_USE_FLASHINFER_MOE_FP8="0"
   export VLLM_USE_FLASHINFER_SAMPLER="0"
 
+  # VLLM_USE_FLASHINFER_MOE_FP8: needed for FP8 MoE on H100 (sm_90+), must be 0 on A100.
+  # Only enable for experiments that use FP8 weights (E002–E015 except E001, E015, E014 where
+  # we still probe the compute cap but leave at 0 for safety on A100).
   case "$exp" in
-    E001)
-      export VLLM_ATTENTION_BACKEND="FLASH_ATTN"
+    E001|E014|E015)
+      # BF16 weights — FlashInfer FP8 MoE is irrelevant; keep 0
+      export VLLM_USE_FLASHINFER_MOE_FP8="0"
       ;;
-    E002)
-      export VLLM_ATTENTION_BACKEND="FLASH_ATTN"
-      ;;
-    E003|E004|E005|E006|E007|E008|E009|E010|E011|E013|E014|E015)
-      export VLLM_ATTENTION_BACKEND="FLASHINFER"
-      # Enable FlashInfer FP8 MoE only if on H100 (sm_90 / sm_90a).
-      # On A100 this raises NotImplementedError; guard by checking compute cap.
+    E002|E003|E004|E005|E006|E007|E008|E009|E010|E011|E012|E013)
+      # FP8 weights: enable FlashInfer FP8 MoE on H100, keep off on A100
       COMPUTE_CAP=$(python3 -c "import torch; cc=torch.cuda.get_device_capability(); print(cc[0]*10+cc[1])" 2>/dev/null || echo "0")
       if [[ "$COMPUTE_CAP" -ge 90 ]]; then
         export VLLM_USE_FLASHINFER_MOE_FP8="1"
@@ -98,16 +101,13 @@ set_env_for_exp() {
         echo "  → non-H100 (sm_${COMPUTE_CAP}): VLLM_USE_FLASHINFER_MOE_FP8=0 (Marlin FP8 MoE fallback)"
       fi
       ;;
-    E012)
-      export VLLM_ATTENTION_BACKEND="FLASH_ATTN"
-      # E012 is the FA2 head-to-head at the optimal config — no FlashInfer
-      ;;
     *)
-      echo "WARNING: unknown exp '$exp' — using default FLASH_ATTN"
+      export VLLM_USE_FLASHINFER_MOE_FP8="0"
+      echo "WARNING: unknown exp '$exp' — using safe defaults"
       ;;
   esac
 
-  echo "  ENV: VLLM_ATTENTION_BACKEND=$VLLM_ATTENTION_BACKEND  VLLM_USE_FLASHINFER_MOE_FP8=$VLLM_USE_FLASHINFER_MOE_FP8"
+  echo "  ENV: VLLM_ATTENTION_BACKEND=$VLLM_ATTENTION_BACKEND  VLLM_USE_FLASHINFER_MOE_FP8=$VLLM_USE_FLASHINFER_MOE_FP8  VLLM_USE_FLASHINFER_SAMPLER=$VLLM_USE_FLASHINFER_SAMPLER"
 }
 
 # ---------------------------------------------------------------------------

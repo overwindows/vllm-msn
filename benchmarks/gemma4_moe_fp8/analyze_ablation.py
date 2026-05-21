@@ -14,25 +14,39 @@ import statistics
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# A100 reference results from examples/EXPERIMENT_PLAN_ABLATION_STUDY.md
-# Used to contextualize H100 gains.
+# A100 reference results — old A100 ablation study (EXPERIMENT_PLAN_ABLATION_STUDY.md)
+# These are provided for hardware comparison context only.  The old study used
+# a DIFFERENT experiment numbering; the table below maps old results to the
+# closest new experiment IDs where the configuration is equivalent.
+#
+# Old study used: output_len=1024, max_model_len=32768, layer1_delta_1k_test.txt
+# New study uses: output_len=8192, max_model_len=24576, sc1_delta_v2.jsonl (1000 prompts)
+# Numbers are NOT directly comparable — ratios are more informative than absolutes.
+#
+# Old IDs → new ID mapping (best-effort):
+#   OLD E001 BF16 baseline                → new E001
+#   OLD E002 +FP8 weights                 → new E002
+#   OLD E006 +MTP k=5 (with CUDA graphs)  → new E005 / E006
+#   OLD E007 text-only                    → new E006
+#   OLD E011 gpu_mem=0.80 [OLD BEST]      → new E010
 # ---------------------------------------------------------------------------
 A100_RESULTS: dict[str, dict] = {
-    "E001": dict(output_tps=654.9,  label="BF16 baseline (FA2)"),
-    "E002": dict(output_tps=692.1,  label="+FP8 weights"),
-    "E003": dict(output_tps=696.5,  label="+FlashInfer attn"),
-    "E004": dict(output_tps=789.1,  label="+batch 128"),
-    "E005": dict(output_tps=768.4,  label="+CUDA graphs"),
-    "E006": dict(output_tps=974.6,  label="+MTP k=5"),
-    "E007": dict(output_tps=957.3,  label="text-only model"),
-    "E008": dict(output_tps=968.4,  label="batch 192"),
-    "E009": dict(output_tps=970.9,  label="batch 256"),
-    "E010": dict(output_tps=955.1,  label="gpu_mem=0.70"),
-    "E011": dict(output_tps=983.7,  label="gpu_mem=0.80 [A100 BEST]"),
-    "E012": dict(output_tps=973.6,  label="FA2 at optimal"),
-    "E013": dict(output_tps=781.4,  label="no MTP"),
-    "E014": dict(output_tps=None,   label="FP8 KV cache — FAIL on A100"),
-    "E015": dict(output_tps=477.1,  label="BF16 ref (text, no opts)"),
+    # New ID  : (old output_tps, description of closest old experiment)
+    "E001": dict(output_tps=654.9,  label="BF16 baseline — old A100 study E001"),
+    "E002": dict(output_tps=692.1,  label="+FP8 weights — old A100 study E002"),
+    "E003": dict(output_tps=None,   label="FP8 KV (fp8_e4m3) — FAIL on A100 (no old ref)"),
+    "E004": dict(output_tps=768.4,  label="+CUDA graphs — old A100 study E005"),
+    "E005": dict(output_tps=974.6,  label="+MTP k=5 — old A100 study E006"),
+    "E006": dict(output_tps=957.3,  label="+text-only — old A100 study E007"),
+    "E007": dict(output_tps=None,   label="batch sweep mns=64 (no old ref)"),
+    "E008": dict(output_tps=968.4,  label="batch sweep mns=192 — old A100 study E008"),
+    "E009": dict(output_tps=970.9,  label="batch sweep mns=256 — old A100 study E009"),
+    "E010": dict(output_tps=983.7,  label="gpu_mem=0.80 — old A100 study E011 [OLD BEST]"),
+    "E011": dict(output_tps=None,   label="gpu_mem=0.95 (no old ref)"),
+    "E012": dict(output_tps=781.4,  label="no MTP at optimal — old A100 study E013"),
+    "E013": dict(output_tps=None,   label="no CUDA graphs at optimal (no old ref)"),
+    "E014": dict(output_tps=None,   label="BF16 weights at optimal (no old ref)"),
+    "E015": dict(output_tps=477.1,  label="BF16 ref text-only no opts — old A100 study E015"),
 }
 
 
@@ -145,9 +159,10 @@ def render_table(summaries: list[dict], scenario: str) -> str:
         lines.append(f"\n**Best H100 result**: {best['exp_id']} — {best['output_tps_mean']:.1f} output tok/s")
         if h100_base:
             lines.append(f"  Overall H100 speedup vs BF16 baseline: {best['output_tps_mean']/h100_base:.3f}×")
-        if a100_base and best["output_tps_mean"]:
-            lines.append(f"  H100 best vs A100 best (E011={A100_RESULTS['E011']['output_tps']}): "
-                         f"{best['output_tps_mean']/A100_RESULTS['E011']['output_tps']:.2f}×")
+        a100_best_tps = A100_RESULTS.get("E010", {}).get("output_tps")  # E010=gpu_mem=0.80, old A100 best
+        if a100_best_tps and best["output_tps_mean"]:
+            lines.append(f"  H100 best vs old A100 best (E010={a100_best_tps}): "
+                         f"{best['output_tps_mean']/a100_best_tps:.2f}×")
     lines.append("")
     return "\n".join(lines)
 
@@ -216,15 +231,23 @@ def main():
 
     for sc in scenarios:
         md_lines.append(f"**{sc}:**")
+        # Group A — reproduce REPRODUCE_PRODSHAPE baseline
         md_lines.append(delta_str(sc, "E002", "E001", "FP8 weights vs BF16 (E002-E001)"))
-        md_lines.append(delta_str(sc, "E003", "E002", "FlashInfer attn vs FA2 (E003-E002)"))
-        md_lines.append(delta_str(sc, "E004", "E003", "batch 128 vs 64 (E004-E003)"))
-        md_lines.append(delta_str(sc, "E005", "E004", "CUDA graphs vs eager (E005-E004)"))
-        md_lines.append(delta_str(sc, "E006", "E005", "MTP k=5 (E006-E005)"))
-        md_lines.append(delta_str(sc, "E007", "E006", "text-only model (E007-E006)"))
-        md_lines.append(delta_str(sc, "E011", "E007", "gpu_mem 0.80 vs 0.75 (E011-E007)"))
-        md_lines.append(delta_str(sc, "E012", "E011", "FA2 vs FlashInfer at optimal (E012-E011)"))
-        md_lines.append(delta_str(sc, "E013", "E011", "disable MTP at optimal (E013-E011) — should be negative"))
+        # Group B — incremental optimizations
+        md_lines.append(delta_str(sc, "E004", "E002", "CUDA graphs vs eager (E004-E002)"))
+        md_lines.append(delta_str(sc, "E005", "E004", "MTP k=5 (E005-E004)"))
+        md_lines.append(delta_str(sc, "E006", "E005", "text-only model (E006-E005)"))
+        # Group C — batch size sweep
+        md_lines.append(delta_str(sc, "E007", "E006", "batch mns=64 vs 128 (E007-E006)"))
+        md_lines.append(delta_str(sc, "E008", "E006", "batch mns=192 vs 128 (E008-E006)"))
+        md_lines.append(delta_str(sc, "E009", "E006", "batch mns=256 vs 128 (E009-E006)"))
+        # Group D — gpu_mem sweep
+        md_lines.append(delta_str(sc, "E010", "E006", "gpu_mem=0.80 vs 0.90 (E010-E006)"))
+        md_lines.append(delta_str(sc, "E011", "E006", "gpu_mem=0.95 vs 0.90 (E011-E006)"))
+        # Group E — isolation
+        md_lines.append(delta_str(sc, "E012", "E006", "disable MTP at optimal (E012-E006) — negative expected"))
+        md_lines.append(delta_str(sc, "E013", "E006", "disable CUDA graphs at optimal (E013-E006) — negative expected"))
+        md_lines.append(delta_str(sc, "E014", "E006", "BF16 weights at optimal (E014-E006) — isolates FP8"))
         md_lines.append("")
 
     md_content = "\n".join(md_lines)

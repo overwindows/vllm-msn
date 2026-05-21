@@ -95,192 +95,224 @@ MODEL_ASSISTANT = os.environ.get(
 # and adapted for H100 NVL where noted.
 #
 # Each entry:
-#   label            : short human-readable tag
-#   quantization     : None | "fp8"
-#   kv_cache_dtype   : "auto" | "fp8_e4m3" | "fp8_e5m2"
-#   attention_backend: set via VLLM_ATTENTION_BACKEND (env var before import)
-#   enforce_eager    : True = no CUDA graphs; False = CUDA graphs enabled
-#   mtp              : True = MTP speculative decoding enabled
-#   mtp_k            : number of speculative tokens (ignored if mtp=False)
-#   max_num_seqs     : max concurrent sequences
-#   gpu_memory_utilization
-#   model_variant    : "full" | "text_only"
+#   label                  : short human-readable tag
+#   quantization           : None | "fp8"
+#   kv_cache_dtype         : "auto" | "fp8_e4m3"
+#   enforce_eager          : True = no CUDA graphs; False = CUDA graphs enabled
+#   mtp                    : True = MTP speculative decoding enabled
+#   mtp_k                  : number of speculative tokens (ignored if mtp=False)
+#   max_num_seqs           : max concurrent sequences
+#   gpu_memory_utilization : fraction of GPU memory for vLLM
+#   model_variant          : "full" | "text_only"
+#
+# Note: there is NO attention_backend field in these dicts.  Gemma 4 has
+# heterogeneous attention head dims (256 and 512), so vLLM forces TRITON_ATTN
+# at runtime regardless of VLLM_ATTENTION_BACKEND.  The env var is set by
+# run_ablation.sh for logging purposes only — it has no effect on this model.
 #
 # A100 run notes (sm_80):
-#   - VLLM_USE_FLASHINFER_MOE_FP8 must remain UNSET — FlashInfer FP8 MoE
-#     requires Hopper sm_90 tensor cores; on A100 it raises NotImplementedError.
-#     vLLM falls back to Marlin FP8 MoE which works on A100.
-#   - E014 (fp8_e4m3 KV cache) is expected to FAIL on A100 — Triton on sm_80
-#     does not support fp8e4nv; this failure IS the documented result.
+#   - VLLM_USE_FLASHINFER_MOE_FP8=0 on A100 — FlashInfer FP8 MoE requires
+#     Hopper sm_90 tensor cores; on A100 vLLM falls back to Marlin FP8 MoE.
+#   - E003 (+FP8 KV cache fp8_e4m3) is expected to FAIL on A100 — Triton
+#     on sm_80 does not support fp8e4nv; the error IS the documented result.
 #   - VLLM_USE_FLASHINFER_SAMPLER=0 to avoid JIT compile issues with old nvcc.
+#
+# E001 baseline matches REPRODUCE_PRODSHAPE.md sc1 settings:
+#   mns=128, gpu_memory_utilization=0.90, no quantization, no CUDA graphs, no MTP.
 # ---------------------------------------------------------------------------
 EXPERIMENTS: dict[str, dict] = {
+    # ------------------------------------------------------------------
+    # E001 — exact REPRODUCE_PRODSHAPE.md sc1 baseline (BF16, no opts)
+    # This is the number to reproduce first.
+    # ------------------------------------------------------------------
     "E001": dict(
-        label="baseline (BF16 / FA2, full model, no opts)",
+        label="BF16 baseline — matches REPRODUCE_PRODSHAPE sc1",
         quantization=None,
         kv_cache_dtype="auto",
-        attention_backend="FLASH_ATTN",
-        enforce_eager=True,
-        mtp=False,   mtp_k=0,
-        max_num_seqs=64,
-        gpu_memory_utilization=0.95,
-        model_variant="full",
-    ),
-    "E002": dict(
-        label="+FP8 weights (FA2)",
-        quantization="fp8",
-        kv_cache_dtype="auto",
-        attention_backend="FLASH_ATTN",
-        enforce_eager=True,
-        mtp=False,   mtp_k=0,
-        max_num_seqs=64,
-        gpu_memory_utilization=0.85,
-        model_variant="full",
-    ),
-    "E003": dict(
-        label="swap attention backend → FlashInfer (+FP8 MoE on H100)",
-        quantization="fp8",
-        kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
-        enforce_eager=True,
-        mtp=False,   mtp_k=0,
-        max_num_seqs=64,
-        gpu_memory_utilization=0.85,
-        model_variant="full",
-    ),
-    "E004": dict(
-        label="+batch 128",
-        quantization="fp8",
-        kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
         enforce_eager=True,
         mtp=False,   mtp_k=0,
         max_num_seqs=128,
-        gpu_memory_utilization=0.85,
+        gpu_memory_utilization=0.90,
         model_variant="full",
     ),
-    "E005": dict(
-        label="+CUDA graphs (full + piecewise)",
+    # ------------------------------------------------------------------
+    # E002 — +FP8 weights only (matches REPRODUCE_PRODSHAPE FP8 run,
+    #         minus kv-cache-dtype fp8 which fails on A100)
+    # ------------------------------------------------------------------
+    "E002": dict(
+        label="+FP8 weights (kv cache stays BF16 / auto)",
         quantization="fp8",
         kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
+        enforce_eager=True,
+        mtp=False,   mtp_k=0,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="full",
+    ),
+    # ------------------------------------------------------------------
+    # E003 — +FP8 KV cache on top of FP8 weights
+    #         REPRODUCE_PRODSHAPE uses --kv-cache-dtype fp8 on H100.
+    #         On A100 (sm_80) this is expected to FAIL — that IS the result.
+    # ------------------------------------------------------------------
+    "E003": dict(
+        label="+FP8 KV cache (fp8_e4m3) — FAIL expected on A100",
+        quantization="fp8",
+        kv_cache_dtype="fp8_e4m3",
+        enforce_eager=True,
+        mtp=False,   mtp_k=0,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="full",
+    ),
+    # ------------------------------------------------------------------
+    # E004 — +CUDA graphs (from E002 — FP8 weights, BF16 KV, no MTP)
+    # ------------------------------------------------------------------
+    "E004": dict(
+        label="+CUDA graphs (enforce_eager=False)",
+        quantization="fp8",
+        kv_cache_dtype="auto",
         enforce_eager=False,
         mtp=False,   mtp_k=0,
         max_num_seqs=128,
-        gpu_memory_utilization=0.75,
+        gpu_memory_utilization=0.90,
         model_variant="full",
     ),
-    "E006": dict(
+    # ------------------------------------------------------------------
+    # E005 — +MTP speculative decoding k=5
+    # ------------------------------------------------------------------
+    "E005": dict(
         label="+MTP speculative decoding (k=5)",
         quantization="fp8",
         kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
         enforce_eager=False,
         mtp=True,    mtp_k=5,
         max_num_seqs=128,
-        gpu_memory_utilization=0.75,
+        gpu_memory_utilization=0.90,
         model_variant="full",
     ),
-    "E007": dict(
-        label="swap to text-only model (vision stripped)",
+    # ------------------------------------------------------------------
+    # E006 — text-only model (vision tower stripped)
+    # ------------------------------------------------------------------
+    "E006": dict(
+        label="+text-only model (vision stripped)",
         quantization="fp8",
         kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
         enforce_eager=False,
         mtp=True,    mtp_k=5,
         max_num_seqs=128,
-        gpu_memory_utilization=0.75,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
+    # ------------------------------------------------------------------
+    # E007–E009 — batch size sweep (from E006 optimal so far)
+    # ------------------------------------------------------------------
+    "E007": dict(
+        label="batch sweep: mns=64",
+        quantization="fp8",
+        kv_cache_dtype="auto",
+        enforce_eager=False,
+        mtp=True,    mtp_k=5,
+        max_num_seqs=64,
+        gpu_memory_utilization=0.90,
         model_variant="text_only",
     ),
     "E008": dict(
-        label="batch 192",
+        label="batch sweep: mns=192",
         quantization="fp8",
         kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
         enforce_eager=False,
         mtp=True,    mtp_k=5,
         max_num_seqs=192,
-        gpu_memory_utilization=0.75,
+        gpu_memory_utilization=0.90,
         model_variant="text_only",
     ),
     "E009": dict(
-        label="batch 256",
+        label="batch sweep: mns=256",
         quantization="fp8",
         kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
         enforce_eager=False,
         mtp=True,    mtp_k=5,
         max_num_seqs=256,
-        gpu_memory_utilization=0.75,
+        gpu_memory_utilization=0.90,
         model_variant="text_only",
     ),
+    # ------------------------------------------------------------------
+    # E010–E011 — gpu_memory_utilization sweep (from E006)
+    # ------------------------------------------------------------------
     "E010": dict(
-        label="gpu_memory_utilization=0.70",
+        label="gpu_mem sweep: 0.80",
         quantization="fp8",
         kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
-        enforce_eager=False,
-        mtp=True,    mtp_k=5,
-        max_num_seqs=128,
-        gpu_memory_utilization=0.70,
-        model_variant="text_only",
-    ),
-    "E011": dict(
-        label="gpu_memory_utilization=0.80  [best on A100]",
-        quantization="fp8",
-        kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
         enforce_eager=False,
         mtp=True,    mtp_k=5,
         max_num_seqs=128,
         gpu_memory_utilization=0.80,
         model_variant="text_only",
     ),
-    "E012": dict(
-        label="swap attention back to FA2 at optimal config",
+    "E011": dict(
+        label="gpu_mem sweep: 0.95",
         quantization="fp8",
         kv_cache_dtype="auto",
-        attention_backend="FLASH_ATTN",
         enforce_eager=False,
         mtp=True,    mtp_k=5,
         max_num_seqs=128,
-        gpu_memory_utilization=0.75,
-        model_variant="text_only",
-    ),
-    "E013": dict(
-        label="disable MTP at optimal config (isolates MTP contribution)",
-        quantization="fp8",
-        kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
-        enforce_eager=False,
-        mtp=False,   mtp_k=0,
-        max_num_seqs=128,
-        gpu_memory_utilization=0.75,
-        model_variant="text_only",
-    ),
-    "E014": dict(
-        label="FP8 E4M3 KV cache (expected FAIL on A100, should work on H100)",
-        quantization="fp8",
-        kv_cache_dtype="fp8_e4m3",
-        attention_backend="FLASHINFER",
-        enforce_eager=False,
-        mtp=True,    mtp_k=5,
-        max_num_seqs=128,
-        gpu_memory_utilization=0.75,
-        model_variant="text_only",
-    ),
-    "E015": dict(
-        label="BF16 reference baseline (text-only, no opts)",
-        quantization=None,
-        kv_cache_dtype="auto",
-        attention_backend="FLASHINFER",
-        enforce_eager=True,
-        mtp=False,   mtp_k=0,
-        max_num_seqs=32,
         gpu_memory_utilization=0.95,
         model_variant="text_only",
     ),
+    # ------------------------------------------------------------------
+    # E012 — no MTP at optimal config (isolate MTP contribution)
+    # ------------------------------------------------------------------
+    "E012": dict(
+        label="no MTP at optimal (isolates MTP contribution)",
+        quantization="fp8",
+        kv_cache_dtype="auto",
+        enforce_eager=False,
+        mtp=False,   mtp_k=0,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
+    # ------------------------------------------------------------------
+    # E013 — no CUDA graphs at optimal (isolate CUDA graph contribution)
+    # ------------------------------------------------------------------
+    "E013": dict(
+        label="no CUDA graphs at optimal (isolates CG contribution)",
+        quantization="fp8",
+        kv_cache_dtype="auto",
+        enforce_eager=True,
+        mtp=True,    mtp_k=5,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
+    # ------------------------------------------------------------------
+    # E014 — BF16 KV cache at optimal config (isolate FP8 weight contribution)
+    # ------------------------------------------------------------------
+    "E014": dict(
+        label="BF16 weights at optimal config (isolates FP8 weight contribution)",
+        quantization=None,
+        kv_cache_dtype="auto",
+        enforce_eager=False,
+        mtp=True,    mtp_k=5,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
+    # ------------------------------------------------------------------
+    # E015 — BF16 reference: text-only, no opts (mirror of E001 but text model)
+    # ------------------------------------------------------------------
+    "E015": dict(
+        label="BF16 reference (text-only, no opts)",
+        quantization=None,
+        kv_cache_dtype="auto",
+        enforce_eager=True,
+        mtp=False,   mtp_k=0,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
 }
+
 
 
 # ---------------------------------------------------------------------------
@@ -577,18 +609,16 @@ def main() -> int:
             return 1
         exp_cfg = EXPERIMENTS[exp_id]
 
-        # Validate that VLLM_ATTENTION_BACKEND matches the experiment's expectation.
-        env_backend = os.environ.get("VLLM_ATTENTION_BACKEND", "")
-        if env_backend and env_backend != exp_cfg["attention_backend"]:
-            print(
-                f"WARNING: VLLM_ATTENTION_BACKEND={env_backend} but experiment "
-                f"{exp_id} expects {exp_cfg['attention_backend']}.  "
-                f"Proceeding with env var (env takes precedence).",
-                flush=True,
-            )
-        elif not env_backend:
-            # Set it so the experiment config is explicit in logs.
-            os.environ["VLLM_ATTENTION_BACKEND"] = exp_cfg["attention_backend"]
+        # Log the attention backend env var (set by run_ablation.sh before import).
+        # Note: Gemma 4 has heterogeneous attention head dims (256 and 512), so
+        # vLLM forces TRITON_ATTN at runtime regardless of VLLM_ATTENTION_BACKEND.
+        # The env var is logged for reproducibility but has no effect on this model.
+        env_backend = os.environ.get("VLLM_ATTENTION_BACKEND", "unset")
+        print(
+            f"  VLLM_ATTENTION_BACKEND={env_backend} "
+            f"(Gemma 4 forces TRITON_ATTN at runtime — env var is no-op)",
+            flush=True,
+        )
 
         try:
             run_experiment(
