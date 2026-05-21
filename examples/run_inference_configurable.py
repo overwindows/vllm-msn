@@ -566,6 +566,20 @@ async def main():
     # Aggregate metrics.json
     metrics = aggregate_metrics(records, wall_clock_seconds)
     metrics["dataset"] = dataset_stats
+    # Build the speculative-config snapshot from the ORIGINAL CLI args, not
+    # from our local `speculative_config` dict. vLLM v1 mutates the dict it
+    # receives via AsyncEngineArgs(speculative_config=...) — after engine
+    # init the dict has extra fields including a ModelConfig object that
+    # json.dump can't serialize. Reconstructing from args.* keeps this
+    # section safely JSON-clean.
+    spec_snapshot = (
+        {
+            "model": args.speculative_model,
+            "num_speculative_tokens": args.num_speculative_tokens,
+        }
+        if args.speculative_model
+        else None
+    )
     metrics["config"] = {
         "model_path": args.model_path,
         "dtype": args.dtype,
@@ -576,7 +590,7 @@ async def main():
         "max_num_batched_tokens": args.max_num_batched_tokens,
         "max_model_len": args.max_model_len,
         "enforce_eager": enforce_eager,
-        "speculative_config": speculative_config,
+        "speculative_config": spec_snapshot,
         "sampling": {
             "temperature": args.temperature,
             "top_p": args.top_p,
@@ -585,7 +599,11 @@ async def main():
     }
     metrics_path = output_path.with_name("metrics.json")
     with open(metrics_path, "w") as f:
-        json.dump(metrics, f, indent=2)
+        # default=str catches any other unexpectedly-non-JSON values that
+        # might creep in via dataset_stats or future additions, so an
+        # otherwise-successful run doesn't lose its metrics.json over a
+        # serialization typo.
+        json.dump(metrics, f, indent=2, default=str)
 
     # Comprehensive summary
     c = metrics["counts"]

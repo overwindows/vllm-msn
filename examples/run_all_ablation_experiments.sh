@@ -91,7 +91,13 @@ echo "GROUP A: Core Optimizations"
 echo "========================================"
 echo ""
 
-# E001: Naive Baseline (may OOM)
+# E001: Naive Baseline. Uses the same max-model-len / max-batched-tokens as
+# every other experiment so the input distribution is identical (some prompts
+# in the MAI dataset exceed 16K tokens — those will fail length validation
+# uniformly across all experiments and show up in metrics.json's
+# failed_errors). Without this, E001 would process a different subset of
+# prompts than the FP8 experiments and the comparison would be invalid.
+# Expected to OOM on BF16 26B; the plan already accounts for this.
 echo "E001: Baseline (no optimizations, may OOM)"
 if run_experiment E001 \
     --backend FLASH_ATTN \
@@ -119,8 +125,11 @@ if run_experiment E002 \
     COMPLETED+=("E002")
 else
     FAILED+=("E002")
-    echo -e "${RED}✗ E002 failed (CRITICAL - FP8 must work)${NC}"
-    exit 1
+    # E002 is the baseline that every later FP8 experiment builds on, so its
+    # failure is a strong signal — but DO NOT exit the master script: we still
+    # want partial results from later experiments to surface in the summary so
+    # the user can diagnose what went wrong (and what still works).
+    echo -e "${RED}✗ E002 failed — FP8 path broken. Continuing so downstream experiments still produce data; review E002 logs first.${NC}"
 fi
 cooldown
 
@@ -336,7 +345,8 @@ else
 fi
 cooldown
 
-# E015: Full BF16 (if fits)
+# E015: Full BF16 reference baseline (text-only). Same input footprint as
+# every other experiment so the comparison is fair. Like E001, may OOM.
 echo "E015: Full BF16 Baseline (may OOM)"
 if run_experiment E015 \
     --backend FLASHINFER \
