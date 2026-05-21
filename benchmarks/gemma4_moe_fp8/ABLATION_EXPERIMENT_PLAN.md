@@ -30,21 +30,59 @@
 
 ## Dataset preparation
 
-Run once before any experiments:
+The source file is `/nvmedata/data/layer1_delta_20260501.txt` (859,988 JSONL rows,
+each with `{"messages": [{"role":"system",...}, {"role":"user",...}]}`).
+
+> **Note**: `prep_dataset.py` filters on `_export_prompt: true` and will yield
+> 0 records from the raw `.txt` file. Use the simpler direct-conversion command
+> below instead:
 
 ```bash
 cd benchmarks/gemma4_moe_fp8
-python3 prep_dataset.py \
-  --src /path/to/delta_prompts/ \
-  --dst datasets/sc1_delta_v2.jsonl \
-  --model google/gemma-4-26B-A4B-it \
-  --max-tokens 16384 \
-  --max-keep 1000
+
+python3 - <<'EOF'
+import json, sys
+from pathlib import Path
+from transformers import AutoTokenizer
+
+src  = "/nvmedata/data/layer1_delta_20260501.txt"
+dst  = "datasets/sc1_delta_v2.jsonl"
+model = "/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it"
+max_tokens = 16384   # max_model_len(24576) - output_len(8192)
+max_keep   = 1000
+
+tok = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+Path(dst).parent.mkdir(exist_ok=True)
+kept, skipped = 0, 0
+with open(src, encoding="utf-8") as fin, open(dst, "w", encoding="utf-8") as fout:
+    for line in fin:
+        line = line.strip()
+        if not line: continue
+        try: d = json.loads(line)
+        except: continue
+        msgs = d.get("messages", [])
+        if not msgs: continue
+        # fold system + user into a single user turn
+        parts = []
+        for m in msgs:
+            c = m.get("content","")
+            if isinstance(c, list): c = "".join(p.get("text","") for p in c if isinstance(p,dict))
+            if m.get("role") == "system": parts.append(f"[SYSTEM]\n{c}")
+            else: parts.append(c)
+        text = "\n\n".join(parts)
+        rendered = tok.apply_chat_template([{"role":"user","content":text}],
+                                           add_generation_prompt=True, tokenize=False)
+        n = len(tok(rendered, add_special_tokens=False).input_ids)
+        if n > max_tokens: skipped += 1; continue
+        fout.write(json.dumps({"prompt": text}, ensure_ascii=False) + "\n")
+        kept += 1
+        if kept >= max_keep: break
+print(f"kept={kept}  skipped_too_long={skipped}")
+EOF
 ```
 
-Parameter rationale:
-- `--max-tokens 16384` = `max_model_len(24576) − output_len(8192)` — leaves exactly the right headroom for the 8192-token output cap
-- `--max-keep 1000` — ablation uses 1000 prompts (vs 10 000 in the full prod benchmark), to keep each experiment under ~30 min on A100
+This is equivalent to `prep_dataset.py` but reads the raw format directly.
+Result: `datasets/sc1_delta_v2.jsonl` with 1000 prompts, all ≤ 16384 tokens rendered.
 
 ---
 
