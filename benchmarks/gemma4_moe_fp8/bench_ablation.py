@@ -106,11 +106,13 @@ MODEL_ASSISTANT = os.environ.get(
 #   gpu_memory_utilization
 #   model_variant    : "full" | "text_only"
 #
-# H100-specific notes vs the A100 run:
-#   - VLLM_USE_FLASHINFER_MOE_FP8=1 is now SET for all FlashInfer FP8 runs
-#     (Hopper sm_90 has native FP8 tensor cores — the A100 couldn't use this).
-#   - E014 (fp8_e4m3 KV cache) is expected to SUCCEED on H100 instead of fail.
-#   - E001 (BF16) will likely have a different memory ceiling with 80 GB HBM3.
+# A100 run notes (sm_80):
+#   - VLLM_USE_FLASHINFER_MOE_FP8 must remain UNSET — FlashInfer FP8 MoE
+#     requires Hopper sm_90 tensor cores; on A100 it raises NotImplementedError.
+#     vLLM falls back to Marlin FP8 MoE which works on A100.
+#   - E014 (fp8_e4m3 KV cache) is expected to FAIL on A100 — Triton on sm_80
+#     does not support fp8e4nv; this failure IS the documented result.
+#   - VLLM_USE_FLASHINFER_SAMPLER=0 to avoid JIT compile issues with old nvcc.
 # ---------------------------------------------------------------------------
 EXPERIMENTS: dict[str, dict] = {
     "E001": dict(
