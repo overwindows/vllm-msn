@@ -15,9 +15,12 @@ from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # A100 reference results — old A100 ablation study (EXPERIMENT_PLAN_ABLATION_STUDY.md)
-# These are provided for hardware comparison context only.  The old study used
-# a DIFFERENT experiment numbering; the table below maps old results to the
-# closest new experiment IDs where the configuration is equivalent.
+# OLD: A100 80GB with AsyncLLMEngine (examples/run_inference_configurable.py)
+# NEW: A100 80GB with LLM engine (benchmarks/gemma4_moe_fp8/bench_ablation.py)
+#
+# These are provided for comparison context only. The old study used a DIFFERENT
+# experiment numbering; the table below maps old results to the closest new
+# experiment IDs where the configuration is equivalent.
 #
 # Old study used: output_len=1024, max_model_len=32768, layer1_delta_1k_test.txt
 # New study uses: output_len=8192, max_model_len=24576, sc1_delta_v2.jsonl (1000 prompts)
@@ -111,14 +114,14 @@ def render_table(summaries: list[dict], scenario: str) -> str:
     if not rows:
         return f"_No data for scenario {scenario}_\n"
 
-    # Find H100 baseline (E001)
-    h100_base = next((r["output_tps_mean"] for r in rows if r["exp_id"] == "E001"), None)
-    a100_base = A100_RESULTS.get("E001", {}).get("output_tps")
+    # Find baseline (E001)
+    current_base = next((r["output_tps_mean"] for r in rows if r["exp_id"] == "E001"), None)
+    old_a100_base = A100_RESULTS.get("E001", {}).get("output_tps")
 
     lines: list[str] = []
     lines.append(f"### Scenario: {scenario}\n")
     lines.append(
-        f"| Exp | Label | out tok/s (H100) | ±σ | vs H100 E001 | A100 ref | H100/A100 |"
+        f"| Exp | Label | out tok/s (A100 80GB) | ±σ | vs E001 | old A100 ref | vs old A100 |"
         f" Backend | eager | MTP | seqs | mem% |"
     )
     lines.append("|-----|-------|:---:|:---:|:---:|:---:|:---:|---------|-------|-----|------|------|")
@@ -129,18 +132,18 @@ def render_table(summaries: list[dict], scenario: str) -> str:
         otps_s = r["output_tps_stdev"] or 0.0
         otps_str = f"{otps:.1f}" if otps else "FAIL"
         otps_sig = f"{otps_s:.1f}" if otps else "—"
-        # vs H100 baseline
-        vs_h100 = f"{otps/h100_base:.3f}×" if (otps and h100_base) else "—"
-        # A100 reference
-        a100 = A100_RESULTS.get(eid, {})
-        a100_tps = a100.get("output_tps")
-        a100_str = f"{a100_tps:.1f}" if a100_tps else "FAIL/NA"
-        # H100 vs A100
-        if otps and a100_tps:
-            ratio = otps / a100_tps
-            h100_vs_a100 = f"{ratio:.2f}×"
+        # vs current baseline
+        vs_base = f"{otps/current_base:.3f}×" if (otps and current_base) else "—"
+        # old A100 reference (from examples/ study)
+        old_a100 = A100_RESULTS.get(eid, {})
+        old_a100_tps = old_a100.get("output_tps")
+        old_a100_str = f"{old_a100_tps:.1f}" if old_a100_tps else "FAIL/NA"
+        # current vs old A100
+        if otps and old_a100_tps:
+            ratio = otps / old_a100_tps
+            vs_old_a100 = f"{ratio:.2f}×"
         else:
-            h100_vs_a100 = "—"
+            vs_old_a100 = "—"
 
         backend = r["attention_backend"] or "?"
         eager = "✓" if str(r["enforce_eager"]).lower() in ("true", "1") else "✗ (CG)"
@@ -149,20 +152,20 @@ def render_table(summaries: list[dict], scenario: str) -> str:
         mem = r["gpu_memory_utilization"]
 
         lines.append(
-            f"| {eid} | {r['label'][:55]} | {otps_str} | {otps_sig} | {vs_h100} "
-            f"| {a100_str} | {h100_vs_a100} | {backend} | {eager} | {mtp_str} | {seqs} | {mem} |"
+            f"| {eid} | {r['label'][:55]} | {otps_str} | {otps_sig} | {vs_base} "
+            f"| {old_a100_str} | {vs_old_a100} | {backend} | {eager} | {mtp_str} | {seqs} | {mem} |"
         )
 
     # Best row
     best = max((r for r in rows if r["output_tps_mean"]), key=lambda r: r["output_tps_mean"], default=None)
     if best:
-        lines.append(f"\n**Best H100 result**: {best['exp_id']} — {best['output_tps_mean']:.1f} output tok/s")
-        if h100_base:
-            lines.append(f"  Overall H100 speedup vs BF16 baseline: {best['output_tps_mean']/h100_base:.3f}×")
-        a100_best_tps = A100_RESULTS.get("E010", {}).get("output_tps")  # E010=gpu_mem=0.80, old A100 best
-        if a100_best_tps and best["output_tps_mean"]:
-            lines.append(f"  H100 best vs old A100 best (E010={a100_best_tps}): "
-                         f"{best['output_tps_mean']/a100_best_tps:.2f}×")
+        lines.append(f"\n**Best A100 80GB result**: {best['exp_id']} — {best['output_tps_mean']:.1f} output tok/s")
+        if current_base:
+            lines.append(f"  Overall A100 80GB speedup vs BF16 baseline: {best['output_tps_mean']/current_base:.3f}×")
+        old_a100_best_tps = A100_RESULTS.get("E010", {}).get("output_tps")  # E010=gpu_mem=0.80, old A100 best
+        if old_a100_best_tps and best["output_tps_mean"]:
+            lines.append(f"  A100 80GB best vs old A100 best (E010={old_a100_best_tps}): "
+                         f"{best['output_tps_mean']/old_a100_best_tps:.2f}×")
     lines.append("")
     return "\n".join(lines)
 
@@ -190,7 +193,9 @@ def main():
         "",
         "Generated by `analyze_ablation.py` from `ablation_results/all_runs.csv`.",
         "",
-        "## A100 reference (from examples/EXPERIMENT_PLAN_ABLATION_STUDY.md)",
+        "## Old A100 80GB reference (AsyncEngine, from examples/)",
+        "",
+        "_Previous ablation study using `AsyncLLMEngine` (examples/run_inference_configurable.py)_",
         "",
         "| Exp | A100 out tok/s | label |",
         "|-----|---:|-------|",
@@ -202,7 +207,9 @@ def main():
     md_lines.append("")
     md_lines.append("---")
     md_lines.append("")
-    md_lines.append("## H100 Results")
+    md_lines.append("## New A100 80GB Results (LLM engine, this study)")
+    md_lines.append("")
+    md_lines.append("_Current ablation study using `vllm.LLM` (benchmarks/gemma4_moe_fp8/bench_ablation.py)_")
     md_lines.append("")
 
     for sc in scenarios:
@@ -210,7 +217,7 @@ def main():
 
     # Key deltas summary
     md_lines.append("---")
-    md_lines.append("## Key configuration contribution (H100, mean across reps)")
+    md_lines.append("## Key configuration contribution (A100 80GB, mean across reps)")
     md_lines.append("")
     md_lines.append("Estimated contribution of each optimization layer, from ablation pairs:")
     md_lines.append("")

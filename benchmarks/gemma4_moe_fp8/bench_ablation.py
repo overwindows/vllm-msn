@@ -431,8 +431,8 @@ def run_experiment(
     if exp_cfg["kv_cache_dtype"] != "auto":
         llm_kwargs["kv_cache_dtype"] = exp_cfg["kv_cache_dtype"]
     if exp_cfg["mtp"]:
-        llm_kwargs["speculative_model"] = MODEL_ASSISTANT
-        llm_kwargs["num_speculative_tokens"] = exp_cfg["mtp_k"]
+        llm_kwargs["spec_model"] = MODEL_ASSISTANT
+        llm_kwargs["spec_tokens"] = exp_cfg["mtp_k"]
 
     t_engine = time.time()
     llm = LLM(**llm_kwargs)
