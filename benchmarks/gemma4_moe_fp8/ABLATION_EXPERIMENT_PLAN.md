@@ -196,11 +196,14 @@ Bold = the single parameter that differs from E006.
 ## Running the experiments
 
 ### Prepare dataset (once)
+
+See the **Dataset preparation** section above for the full inline Python command.
+Quick reference:
 ```bash
-python3 prep_dataset.py \
-  --src /path/to/delta_prompts/ \
-  --dst datasets/sc1_delta_v2.jsonl \
-  --max-tokens 16384 --max-keep 1000
+# From benchmarks/gemma4_moe_fp8/
+# Run the python3 here-doc in the "Dataset preparation" section.
+# Source: /nvmedata/data/layer1_delta_20260501.txt
+# Output: datasets/sc1_delta_v2.jsonl  (1000 prompts, all ≤ 16384 tokens)
 ```
 
 ### Run all experiments
@@ -241,9 +244,9 @@ python3 analyze_ablation.py
 
 | Variable | Default | Used by |
 |---|---|---|
-| `GEMMA4_MODEL_PATH` | `/mnt/models/gemma-4-26B-A4B-it` | E001–E005, E004 |
-| `GEMMA4_TEXT_ONLY_MODEL_PATH` | `$GEMMA4_MODEL_PATH-text-only` | E006–E015 |
-| `GEMMA4_ASSISTANT_MODEL_PATH` | `$GEMMA4_MODEL_PATH-assistant` | All MTP experiments (E005–E011, E013, E014) |
+| `GEMMA4_MODEL_PATH` | `/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it` | E001–E005 (full model) |
+| `GEMMA4_TEXT_ONLY_MODEL_PATH` | `$GEMMA4_MODEL_PATH-text-only` | E006–E015 (vision tower stripped) |
+| `GEMMA4_ASSISTANT_MODEL_PATH` | `/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it-assistant` | All MTP experiments (E005–E011, E013, E014) |
 
 Override before running:
 ```bash
