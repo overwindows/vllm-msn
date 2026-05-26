@@ -157,13 +157,15 @@ isolated contribution.
 | **E013** | no CUDA graphs at optimal | CUDA graphs disabled | fp8 | ✓ | ✓ k=5 | 128 | 0.90 | text_only |
 | **E014** | BF16 weights at optimal | FP8 weights removed | bf16 | ✗ | ✓ k=5 | 128 | 0.90 | text_only |
 | **E015** | BF16 reference (text-only, no opts) | All opts off | bf16 | ✓ | ✗ | 128 | 0.90 | text_only |
+| **E016** | BF16 + CUDA graphs only | CUDA graphs only | bf16 | ✗ | ✗ | 128 | 0.90 | text_only |
 
 **Isolation pairs** (E006 is the "on" state, column is the "off" state):
 
 | Contribution measured | ON | OFF | Expected sign |
 |---|:---:|:---:|:---:|
 | MTP k=5 | E006 | E012 | E006 > E012 |
-| CUDA graphs | E006 | E013 | E006 ≥ E013 (may regress on heterogeneous batch) |
+| CUDA graphs (on FP8+MTP) | E006 | E013 | E006 ≥ E013 (may regress on heterogeneous batch) |
+| CUDA graphs (on BF16 only) | E016 | E015 | E016 ≥ E015 |
 | FP8 weights | E006 | E014 | E006 > E014 |
 | text-only model vs full | E006 | E005 | E006 > E005 |
 
@@ -188,8 +190,9 @@ isolated contribution.
 | E013 | E | fp8 | auto | **✓** | 5 | 128 | 0.90 | text_only |
 | E014 | E | **bf16** | auto | ✗ | 5 | 128 | 0.90 | text_only |
 | E015 | E | **bf16** | auto | **✓** | **—** | 128 | 0.90 | text_only |
+| E016 | E | **bf16** | auto | ✗ | **—** | 128 | 0.90 | text_only |
 
-Bold = the single parameter that differs from E006.
+Bold = the parameter(s) that differ from E006.
 
 ---
 
@@ -314,20 +317,31 @@ export PATH=/usr/local/cuda-12.9/bin:$PATH
 pip install -e . --no-build-isolation
 ```
 
+### Runtime environment
+
+The precompiled vLLM binaries require CUDA 13 runtime libraries. Add to your shell profile or export before running:
+
+```bash
+export LD_LIBRARY_PATH=/root/miniconda3/envs/vllm-ablation/lib/python3.10/site-packages/nvidia/cu13/lib:$LD_LIBRARY_PATH
+```
+
+This is automatically set by `run_ablation.sh`.
+
 ### Verifying the installation
 
 ```bash
 conda activate vllm-ablation
+export LD_LIBRARY_PATH=/root/miniconda3/envs/vllm-ablation/lib/python3.10/site-packages/nvidia/cu13/lib:$LD_LIBRARY_PATH
 python -c "import vllm; print(f'vLLM version: {vllm.__version__}')"
 python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}')"
-python -c "from vllm.model_executor.layers.gemma4_fused_ops import fused_dual_rmsnorm; print('Gemma4 fused ops OK')"
+python -c "from vllm.model_executor.layers.gemma4_fused_ops import gemma_dual_rmsnorm_residual_scalar; print('Gemma4 fused ops OK')"
 ```
 
 Expected output:
 ```
-vLLM version: 0.21.1rc1.dev269+ge0959bd61.d20260526.precompiled
+vLLM version: 0.21.1rc1.dev269+ge0959bd61.d20260526
 PyTorch: 2.11.0+cu126, CUDA: 12.6
-Gemma4 fused ops OK
+Gemma4 fused ops loaded: gemma_dual_rmsnorm_residual_scalar
 ```
 
 ---

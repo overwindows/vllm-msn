@@ -20,6 +20,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # ---------------------------------------------------------------------------
+# CUDA runtime library path (required for precompiled vLLM binaries)
+# ---------------------------------------------------------------------------
+# Precompiled vLLM binaries need CUDA 13 runtime from nvidia-cudart-cu13 package
+export LD_LIBRARY_PATH=/root/miniconda3/envs/vllm-ablation/lib/python3.10/site-packages/nvidia/cu13/lib:${LD_LIBRARY_PATH:-}
+
+# ---------------------------------------------------------------------------
 # Default model paths (override via env)
 # ---------------------------------------------------------------------------
 : "${GEMMA4_MODEL_PATH:=/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it}"
@@ -53,7 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $RUN_ALL -eq 1 ]]; then
-  EXP_IDS="E001,E002,E003,E004,E005,E006,E007,E008,E009,E010,E011,E012,E013,E014,E015"
+  EXP_IDS="E001,E002,E003,E004,E005,E006,E007,E008,E009,E010,E011,E012,E013,E014,E015,E016"
 fi
 
 if [[ -z "$EXP_IDS" ]]; then
@@ -83,10 +89,10 @@ set_env_for_exp() {
   export VLLM_USE_FLASHINFER_SAMPLER="0"
 
   # VLLM_USE_FLASHINFER_MOE_FP8: needed for FP8 MoE on H100 (sm_90+), must be 0 on A100.
-  # Only enable for experiments that use FP8 weights (E002–E015 except E001, E015, E014 where
-  # we still probe the compute cap but leave at 0 for safety on A100).
+  # Only enable for experiments that use FP8 weights (E002–E013).
+  # E001, E014, E015, E016 use full-precision weights (BF16), so FP8 MoE is irrelevant.
   case "$exp" in
-    E001|E014|E015)
+    E001|E014|E015|E016)
       # BF16 weights — FlashInfer FP8 MoE is irrelevant; keep 0
       export VLLM_USE_FLASHINFER_MOE_FP8="0"
       ;;

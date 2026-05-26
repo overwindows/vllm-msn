@@ -311,6 +311,19 @@ EXPERIMENTS: dict[str, dict] = {
         gpu_memory_utilization=0.90,
         model_variant="text_only",
     ),
+    # ------------------------------------------------------------------
+    # E016 — BF16/FP16 + CUDA graphs only (isolate CUDA graphs on full precision)
+    # ------------------------------------------------------------------
+    "E016": dict(
+        label="BF16 + CUDA graphs only (no MTP, no FP8)",
+        quantization=None,
+        kv_cache_dtype="auto",
+        enforce_eager=False,
+        mtp=False,   mtp_k=0,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
 }
 
 
