@@ -565,13 +565,13 @@ Skip this if you serve multimodal traffic.
 
 > **Attribution:** the H100 NVL numbers in this section were collected by a
 > colleague (commits `9693ed06e`, `4c7f14da8`) and are quoted here verbatim
-> from [`REPRODUCE_PRODSHAPE.md`](../benchmarks/gemma4_moe_fp8/REPRODUCE_PRODSHAPE.md)
-> §6. They were **not re-run on this branch** — the raw `bench_results_*/all_runs.csv`
+> from [`benchmarks/gemma4_moe_fp8/README.md`](../benchmarks/gemma4_moe_fp8/README.md#2-prod-shape-benchmark-h100-nvl)
+> §2.5. They were **not re-run on this branch** — the raw `bench_results_*/all_runs.csv`
 > artifacts are not checked into the repo. To independently reproduce them,
 > follow [§14.1](#141-h100-nvl--production-shape-anchors) on an H100 NVL.
 
-Source: [`REPRODUCE_PRODSHAPE.md`](../benchmarks/gemma4_moe_fp8/REPRODUCE_PRODSHAPE.md)
-§6. Driver: [`bench_offline.py`](../benchmarks/gemma4_moe_fp8/bench_offline.py).
+Source: [`benchmarks/gemma4_moe_fp8/README.md` §2.5](../benchmarks/gemma4_moe_fp8/README.md#25-anchor-numbers-10000-prompts-per-scenario).
+Driver: [`bench_offline.py`](../benchmarks/gemma4_moe_fp8/bench_offline.py).
 
 Fixed config (constant across all 4 anchors): `gpu_memory_utilization=0.95`,
 `max_num_batched_tokens=16384`, prefix caching ON, chunked prefill ON,
@@ -587,7 +587,7 @@ Per-scenario differences:
 | `num_prompts` | 10 000 | 10 000 |
 | `chunk_size` | 2 000 (5 chunks) | 1 000 (10 chunks) |
 
-**Results** (means across all chunks; values are exactly what `REPRODUCE_PRODSHAPE.md` §6 reports):
+**Results** (means across all chunks; values are exactly what `benchmarks/gemma4_moe_fp8/README.md` §2.5 reports):
 
 | Run | Scenario | `out_tps` | `total_tps` | mean out_len | stop ratio | wall |
 |---|---|---:|---:|---:|---:|---:|
@@ -612,7 +612,7 @@ Per-scenario differences:
 - **sc1 FP8 wins +10 %** — decode-dominant; less weight traffic helps.
 - **sc2 FP8 loses −8 %** — prefill-dominant; TRITON_ATTN's FP8 prefill path is immature.
 
-**Why FP8 regresses on sc2** (verbatim from `REPRODUCE_PRODSHAPE.md`): Gemma 4's
+**Why FP8 regresses on sc2** (verbatim from `benchmarks/gemma4_moe_fp8/README.md` §2.6): Gemma 4's
 heterogeneous head dims force `TRITON_ATTN` instead of `FLASH_ATTN_V3` /
 `FLASHINFER`. TRITON_ATTN has an immature FP8 prefill path; sc2 is ~95 %
 prefill, so this dominates. Additional contributors:
@@ -638,11 +638,11 @@ across hardware; absolute numbers will not.
 
 > **Attribution:** as with [§13.1](#131-h100-nvl--production-shape-anchor-numbers),
 > the v1 / v2 H100 NVL sweeps were collected by a colleague and are quoted
-> verbatim from `BENCHMARK_REPORT.md`. Not re-run on this branch.
+> verbatim from the consolidated `benchmarks/gemma4_moe_fp8/README.md`. Not
+> re-run on this branch.
 
-Source: [`BENCHMARK_REPORT.md`](../benchmarks/gemma4_moe_fp8/BENCHMARK_REPORT.md),
-[`BENCHMARK_LOG.md`](../benchmarks/gemma4_moe_fp8/BENCHMARK_LOG.md). Driver:
-[`bench_offline.py`](../benchmarks/gemma4_moe_fp8/bench_offline.py).
+Source: [`benchmarks/gemma4_moe_fp8/README.md` §3](../benchmarks/gemma4_moe_fp8/README.md#3-sweep-v1--v2-h100-nvl).
+Driver: [`bench_offline.py`](../benchmarks/gemma4_moe_fp8/bench_offline.py).
 **Both sweeps are bf16, no quantization, no MTP.** Engine settings constant
 from §2 of the report: `quantization=none`, `gpu_memory_utilization=0.95`,
 `max_num_batched_tokens=16384`, CUDA graphs on, speculative decoding off.
@@ -653,7 +653,7 @@ sc1 = `prompts_delta.txt` filtered to [2K, 3K] tokens → 225 prompts/run, 3 rep
 `max_model_len=12288`. sc2 = `prompts_personal.txt` filtered to [15K, 25K]
 → 1000 prompts/run, 2 reps; `max_model_len=33792`.
 
-**sc1 (input 2K–3K, output ≤ 8K)** — from `BENCHMARK_REPORT.md` §3.4:
+**sc1 (input 2K–3K, output ≤ 8K)** — from `benchmarks/gemma4_moe_fp8/README.md` §3.2:
 
 | `max_num_seqs` | wall (s) | out tok/s | total tok/s | mean out_len |
 |---:|---:|---:|---:|---:|
@@ -663,7 +663,7 @@ sc1 = `prompts_delta.txt` filtered to [2K, 3K] tokens → 225 prompts/run, 3 rep
 | 512 | 128.8 ± 24.4 | 2043 ± 407 | 6367 ± 1319 | 1140 |
 | 1024 | 116.0 ± 26.7 | 2253 ± 438 | 7074 ± 1416 | 1127 |
 
-**sc2 (input 15K–25K, output ≤ 8K)** — from `BENCHMARK_REPORT.md` §3.4:
+**sc2 (input 15K–25K, output ≤ 8K)** — from `benchmarks/gemma4_moe_fp8/README.md` §3.2:
 
 | `max_num_seqs` | wall (s) | out tok/s | total tok/s | mean out_len |
 |---:|---:|---:|---:|---:|
@@ -680,7 +680,7 @@ sc1 = [`delta_prompts/`](../benchmarks/gemma4_moe_fp8/) (mean 2280 tokens, range
 `max_model_len=24576`. sc2 = `persona_prompts/` (mean 19838 tokens), 500
 prompts/run, 2 reps, `max_model_len=49152`.
 
-**sc1** — from `BENCHMARK_REPORT.md` §4.4:
+**sc1** — from `benchmarks/gemma4_moe_fp8/README.md` §3.3:
 
 | `max_num_seqs` | wall (s) | out tok/s | total tok/s | mean out_len |
 |---:|---:|---:|---:|---:|
@@ -688,14 +688,14 @@ prompts/run, 2 reps, `max_model_len=49152`.
 | **128** | **344 ± 10** | **2187 ± 27** | **8749 ± 210** | 753 |
 | 256 | 346 ± 26 | 2185 ± 100 | 8738 ± 591 | 754 |
 
-**sc2** — from `BENCHMARK_REPORT.md` §4.4:
+**sc2** — from `benchmarks/gemma4_moe_fp8/README.md` §3.3:
 
 | `max_num_seqs` | wall (s) | out tok/s | total tok/s | mean out_len |
 |---:|---:|---:|---:|---:|
 | 64 | 915 ± 13 | 447 ± 1 | 10 690 ± 151 | 817 |
 | **128** | **906 ± 1** | **447 ± 1** | **10 787 ± 12** | 810 |
 
-#### v1 vs v2 headline (verbatim from `BENCHMARK_REPORT.md` §5.2)
+#### v1 vs v2 headline (verbatim from `benchmarks/gemma4_moe_fp8/README.md` §3.4)
 
 | Metric | v1 best | v2 best | Δ |
 |---|---:|---:|---:|
@@ -846,7 +846,7 @@ Async. Pick the metric that matches your deployment shape.
 
 ### 14.1 H100 NVL — production-shape anchors
 
-Source: [`REPRODUCE_PRODSHAPE.md`](../benchmarks/gemma4_moe_fp8/REPRODUCE_PRODSHAPE.md).
+Source: [`benchmarks/gemma4_moe_fp8/README.md` §2](../benchmarks/gemma4_moe_fp8/README.md#2-prod-shape-benchmark-h100-nvl).
 Real scripts (verified to exist in the repo):
 
 ```bash
@@ -882,8 +882,8 @@ emit per-request TTFT/TPOT or peak-GiB metrics for these runs.
 
 ### 14.2 H100 NVL — sweep v1 and v2 (BF16-only)
 
-Source: [`REPRODUCE.md`](../benchmarks/gemma4_moe_fp8/REPRODUCE.md). Both
-sweeps drive [`bench_offline.py`](../benchmarks/gemma4_moe_fp8/bench_offline.py)
+Source: [`benchmarks/gemma4_moe_fp8/README.md` §3.6](../benchmarks/gemma4_moe_fp8/README.md#36-how-to-reproduce-v1--v2).
+Both sweeps drive [`bench_offline.py`](../benchmarks/gemma4_moe_fp8/bench_offline.py)
 directly (no dedicated `run_sweep_*.sh` exists).
 
 ```bash
@@ -903,7 +903,7 @@ CSV results land in `bench_results/all_runs.csv` (column schema in
 
 ### 14.3 A100 80 GB — LLM-offline ablation (15 experiments)
 
-Source: [`ABLATION_EXPERIMENT_PLAN.md`](../benchmarks/gemma4_moe_fp8/ABLATION_EXPERIMENT_PLAN.md).
+Source: [`benchmarks/gemma4_moe_fp8/README.md` §4](../benchmarks/gemma4_moe_fp8/README.md#4-a100-80gb-ablation-15-experiments).
 Real scripts:
 
 ```bash
@@ -913,7 +913,7 @@ cd vllm-msn/benchmarks/gemma4_moe_fp8
 #    ablation is datasets/sc1_delta_v2.jsonl, capped at max_model_len(24576)
 #    − output_len(8192) = 16 384 tokens. Use prep_dataset.py if your input
 #    matches its expected schema; otherwise see the inline converter snippet
-#    in ABLATION_EXPERIMENT_PLAN.md.
+#    in benchmarks/gemma4_moe_fp8/README.md §4.2.
 python3 prep_dataset.py \
   --src /nvmedata/data/layer1_delta_20260501.txt \
   --out datasets/sc1_delta_v2.jsonl \
@@ -982,7 +982,7 @@ accepts all `AsyncEngineArgs` as CLI args.
 
 ## 15. Ablation experiment plan
 
-This is the LLM-offline plan from `ABLATION_EXPERIMENT_PLAN.md`
+This is the LLM-offline plan from `benchmarks/gemma4_moe_fp8/README.md` §4
 (benchmarks/gemma4_moe_fp8/). Groups are layered — **E006 is the
 “best-so-far” pivot** that Groups C, D, E branch from.
 
@@ -1466,10 +1466,11 @@ captures every section that was actually used.
 - `examples/create_text_only_model.py` — vision-tower stripper
 - `examples/experiment_runner.sh` — Async ablation driver
 - `examples/run_inference_configurable.py` — Async serving entrypoint
-- `benchmarks/gemma4_moe_fp8/bench_offline.py` — LLM-offline driver
-- `benchmarks/gemma4_moe_fp8/run_ablation.sh` — LLM-offline ablation
-- `benchmarks/gemma4_moe_fp8/run_sweep_v2.sh` — H100 sweep
-- `benchmarks/gemma4_moe_fp8/run_prodshape_anchors.sh` — H100 anchors
+- `benchmarks/gemma4_moe_fp8/README.md` — consolidated source doc (setup, prod-shape bench, v1/v2 sweep, A100 ablation)
+- `benchmarks/gemma4_moe_fp8/bench_offline.py` — prod-shape & sweep driver
+- `benchmarks/gemma4_moe_fp8/bench_ablation.py` — A100 ablation driver
+- `benchmarks/gemma4_moe_fp8/run.bench.fullpass.sh` — prod-shape wrapper
+- `benchmarks/gemma4_moe_fp8/run_ablation.sh` — A100 ablation wrapper
 - `benchmarks/gemma4_moe_fp8/Dockerfile` — H100 prod image
 
 ### External
@@ -1496,12 +1497,8 @@ of the merge; their content lives here in §s noted:
 | `examples/gemma4/framework_code_review.md` | §21 |
 | `examples/gemma4/dataset_analysis.md` | §17 |
 | `examples/gemma4/environment_setup.md` | §14 |
-| `benchmarks/gemma4_moe_fp8/ablation_results/summary.md` | §13.3 |
-| `benchmarks/gemma4_moe_fp8/BENCHMARK_LOG.md` | §13.2, §14.2 |
-| `benchmarks/gemma4_moe_fp8/ABLATION_EXPERIMENT_PLAN.md` | §15, §14.3 |
-| `benchmarks/gemma4_moe_fp8/REPRODUCE_PRODSHAPE.md` | §13.1, §14.1 |
-| `benchmarks/gemma4_moe_fp8/BENCHMARK_REPORT.md` | §13.2 |
-| `benchmarks/gemma4_moe_fp8/REPRODUCE.md` | §14.2 |
+| `benchmarks/gemma4_moe_fp8/ablation_results/summary.md` | §13.3 (still present — auto-generated by `analyze_ablation.py`) |
+| `benchmarks/gemma4_moe_fp8/{REPRODUCE_PRODSHAPE,REPRODUCE,BENCHMARK_REPORT,BENCHMARK_LOG,ABLATION_EXPERIMENT_PLAN}.md` | merged into `benchmarks/gemma4_moe_fp8/README.md`; cited from §13.1, §13.2, §14.1, §14.2, §14.3, §15 |
 
 ---
 
