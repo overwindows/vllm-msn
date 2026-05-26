@@ -97,6 +97,16 @@ def gemma_dual_rmsnorm_residual_scalar(
     Returns:
         Fused output tensor  [M, N], same dtype as x1.
     """
+    if x1.dim() != 2 or x2.dim() != 2 or residual.dim() != 2:
+        raise ValueError("gemma_dual_rmsnorm_residual_scalar expects 2-D tensors")
+    if x1.shape != x2.shape or x1.shape != residual.shape:
+        raise ValueError("x1, x2, and residual must have identical shapes")
+    if x1.stride(-1) != 1 or x2.stride(-1) != 1 or residual.stride(-1) != 1:
+        raise ValueError(
+            "gemma_dual_rmsnorm_residual_scalar requires stride(-1) == 1 for "
+            "x1, x2, and residual"
+        )
+
     M, N = x1.shape
     out = torch.empty_like(x1)
     _gemma_dual_rmsnorm_residual_kernel[(M,)](

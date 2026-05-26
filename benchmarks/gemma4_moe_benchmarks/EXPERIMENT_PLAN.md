@@ -28,6 +28,25 @@
 
 ---
 
+## Branch-level model optimizations (already in this branch)
+
+These are code-level optimizations in the Gemma4 model path and are active
+for all experiments in this plan. They are not toggled per experiment ID.
+
+| Optimization | Where | Why it matters |
+|---|---|---|
+| Fused dual-RMSNorm Triton kernel (with residual/scalar fusion) | `vllm/model_executor/layers/gemma4_fused_ops.py` | Reduces launch overhead and memory traffic in MoE normalization path. |
+| Fused path coverage guard + 3-D support | `vllm/model_executor/models/gemma4.py` | Applies fused RMSNorm path for both 2-D and 3-D tensors (flatten/reshape), while requiring hidden-dim contiguous layout for correctness. |
+| Remove redundant V projection on `k_eq_v` full-attention layers | `vllm/model_executor/models/gemma4.py` | Avoids unnecessary QKV work/weights when V is derived from K-equivalent path. |
+| Gemma4 multimodal guardrails for text-only checkpoints | `vllm/model_executor/models/gemma4_mm.py` | Prevents text-only runs from triggering vision/video initialization failures. |
+
+Interpretation note:
+- The ablation matrix below measures runtime config deltas (FP8, CUDA graphs,
+  MTP, mns, gpu mem, text-only). The above kernel/model-path optimizations are
+  a shared baseline for all rows.
+
+---
+
 ## Dataset preparation
 
 The source file is `/nvmedata/data/layer1_delta_20260501.txt` (859,988 JSONL rows,

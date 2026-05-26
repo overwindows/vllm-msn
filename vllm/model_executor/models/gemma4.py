@@ -753,25 +753,44 @@ class Gemma4DecoderLayer(nn.Module):
             if (
                 not self.has_ple
                 and hidden_states_1.is_cuda
-                and hidden_states_1.dim() == 2
+                and hidden_states_1.dim() in (2, 3)
             ):
                 # Fast path: fuse 5 kernel launches into 1 Triton kernel.
-                # Computes: (rms(rms(h1,w1)+rms(h2,w2), w3) + residual) * scalar
-                # Falls back to unfused path when PLE is present or input
-                # is not a plain 2-D CUDA tensor (e.g. during CUDA graph
-                # capture with 3-D padded shapes).
-                return gemma_dual_rmsnorm_residual_scalar(
-                    hidden_states_1,
-                    self.post_feedforward_layernorm_1.weight.data,
-                    hidden_states_2,
-                    self.post_feedforward_layernorm_2.weight.data,
-                    self.post_feedforward_layernorm.weight.data,
-                    residual,
-                    self.layer_scalar,
-                    self.post_feedforward_layernorm_1.variance_epsilon,
-                    self.post_feedforward_layernorm_2.variance_epsilon,
-                    self.post_feedforward_layernorm.variance_epsilon,
-                ), None
+                # Computes: (rms(rms(h1,w1)+rms(h2,w2), w3) + residual) * scalar.
+                # We also support 3-D inputs by flattening [B, S, H] -> [B*S, H]
+                # and reshaping back after the fused kernel.
+                fused_shape = None
+                fused_h1 = hidden_states_1
+                fused_h2 = hidden_states_2
+                fused_residual = residual
+                if hidden_states_1.dim() == 3:
+                    fused_shape = hidden_states_1.shape
+                    fused_h1 = hidden_states_1.reshape(-1, fused_shape[-1])
+                    fused_h2 = hidden_states_2.reshape(-1, fused_shape[-1])
+                    fused_residual = residual.reshape(-1, fused_shape[-1])
+
+                # The Triton kernel uses row-stride addressing and assumes the
+                # hidden dimension is contiguous in memory (stride(-1) == 1).
+                if (
+                    fused_h1.stride(-1) == 1
+                    and fused_h2.stride(-1) == 1
+                    and fused_residual.stride(-1) == 1
+                ):
+                    fused_out = gemma_dual_rmsnorm_residual_scalar(
+                        fused_h1,
+                        self.post_feedforward_layernorm_1.weight.data,
+                        fused_h2,
+                        self.post_feedforward_layernorm_2.weight.data,
+                        self.post_feedforward_layernorm.weight.data,
+                        fused_residual,
+                        self.layer_scalar,
+                        self.post_feedforward_layernorm_1.variance_epsilon,
+                        self.post_feedforward_layernorm_2.variance_epsilon,
+                        self.post_feedforward_layernorm.variance_epsilon,
+                    )
+                    if fused_shape is not None:
+                        fused_out = fused_out.reshape(fused_shape)
+                    return fused_out, None
 
             # Unfused fallback path
             hidden_states_1 = self.post_feedforward_layernorm_1(hidden_states_1)

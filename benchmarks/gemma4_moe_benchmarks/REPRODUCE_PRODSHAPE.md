@@ -36,6 +36,27 @@ chunks within a scenario.
   ```
 - Hugging Face access to `google/gemma-4-26B-A4B-it` (public; no token needed).
 
+### Branch optimization assumptions
+
+This repro assumes you are running this branch's Gemma4 path (not a vanilla
+upstream wheel). The following code-level optimizations are part of the
+baseline and apply to both bf16 and FP8 runs:
+
+- Fused dual-RMSNorm Triton path in `vllm/model_executor/layers/gemma4_fused_ops.py`.
+- Fused-path 3-D coverage in `vllm/model_executor/models/gemma4.py`:
+  `[B, S, H]` tensors are flattened to `[B*S, H]` for the fused kernel and
+  reshaped back after execution.
+- Fused kernel layout guard: hidden dimension must be contiguous
+  (`stride(-1) == 1`) for `x1/x2/residual`; otherwise the model uses the
+  unfused fallback path.
+- Redundant V-projection removal for `k_eq_v` full-attention layers in
+  `vllm/model_executor/models/gemma4.py`.
+- Text-only multimodal safety guards in `vllm/model_executor/models/gemma4_mm.py`.
+
+If these are missing (for example on a different branch or official wheel),
+absolute throughput can differ and the numbers in this document are not
+directly comparable.
+
 ### Files
 
 | Path | What |
