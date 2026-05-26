@@ -169,7 +169,7 @@ chmod +x compare_experiments.sh
 
 2. **Copy experiment template**:
    ```bash
-   cp EXPERIMENT_LOG_TEMPLATE.md experiments/E001/EXPERIMENT_LOG.md
+   cp experiment_log_template.md experiments/E001/EXPERIMENT_LOG.md
    ```
 
 3. **Fill in template** with results from `summary.txt` and observations
@@ -254,7 +254,7 @@ After run:
 ### Important Files
 
 - `experiment_runner.sh` - Automated experiment runner
-- `EXPERIMENT_LOG_TEMPLATE.md` - Template for documenting experiments
+- `experiment_log_template.md` - Template for documenting experiments
 - `ATTENTION_BACKEND_ANALYSIS.md` - Backend comparison analysis
 - `README_MTP_MEMORY.md` - Memory configuration guide
 

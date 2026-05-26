@@ -54,7 +54,7 @@ Final run of the 15-experiment recipe on 1× A100 80GB PCIe. **14 produced numer
 
 #### Full source dataset (`layer1_delta_20260501.txt`, 24 GB, 859,988 rows)
 
-Analysis performed in 5.6 minutes via [examples/analyze_dataset.py](analyze_dataset.py); full output in [examples/dataset_analysis_full.json](dataset_analysis_full.json) + [examples/dataset_analysis_full.md](dataset_analysis_full.md). The 1K test subset that drives the experiments is a uniform sample of this file.
+Analysis performed in 5.6 minutes via [examples/analyze_dataset.py](../analyze_dataset.py); full output in [examples/dataset_analysis_full.json](../dataset_analysis_full.json) + [dataset_analysis.md](dataset_analysis.md). The 1K test subset that drives the experiments is a uniform sample of this file.
 
 **Schema invariants** (all 859,988 rows): zero JSON-parse errors, every row has exactly 2 messages (system + user). The system content is byte-identical across every row — **3,345 chars on every single row**, the same MAI Profile V3 instruction. This is what makes prefix caching valuable in production.
 
@@ -575,7 +575,7 @@ Things metrics.json *should* have but doesn't, on this run:
 | `experiment_results/E014_fp8_e5m2_FAILED_query_quant_assert/` | Second E014 attempt — vLLM query-quant assertion failure. |
 | `experiment_results/E014_int8_per_token_head_FAILED_page_size/` | Third E014 attempt — KV page-size unification failure. |
 | `experiment_results/ablation_study/` | Master dispatcher log directory (`ablation_study.log`, `ablation_study_resume.log` for partial sweeps). |
-| `EXPERIMENT_PLAN_ABLATION_STUDY.md` | This document — plan + actual settings + results. |
+| `gemma4/ablation_study_async_engine.md` | This document — plan + actual settings + results. |
 | `run_ablation_experiment.sh` | Single-experiment runner. |
 | `run_all_ablation_experiments.sh` | Sequential 15-experiment master script. |
 | `run_remaining_ablation_experiments.sh` | Resume script used after partial-sweep failures. |

@@ -344,7 +344,7 @@ sweep v1 and sweep v2 (see [§13](#13-benchmark-results-all-platforms)).
 
 ## 8. Bottleneck analysis
 
-Source: `EXPERIMENT_LOG_001_MOE_ANALYSIS` (E001 baseline profiling on
+Source: [`gemma4/moe_bottleneck_analysis.md`](gemma4/moe_bottleneck_analysis.md) (E001 baseline profiling on
 A100 80 GB, BF16, no MTP, sc1_delta).
 
 ### 8.1 Where time goes (decode step, per token)
@@ -504,7 +504,7 @@ ablation actually used; `k=5` is the source-of-truth recommendation, not
 
 The Async-engine gain is smaller because token-arrival jitter reduces
 acceptance rate. Source MTP-isolation deltas (from
-`EXPERIMENT_PLAN_ABLATION_STUDY.md`): removing MTP at optimal costs
+[`gemma4/ablation_study_async_engine.md`](gemma4/ablation_study_async_engine.md)): removing MTP at optimal costs
 **−18.4 %** throughput and adds **+37.7 %** TPOT — the single clearest
 isolated-optimization measurement in the campaign.
 
@@ -777,7 +777,7 @@ Notes:
 
 ### 13.4 A100 80 GB PCIe — Async-engine ablation (15 experiments)
 
-Source: `EXPERIMENT_PLAN_ABLATION_STUDY.md` (campaign 2026-05-21). Driver:
+Source: [`gemma4/ablation_study_async_engine.md`](gemma4/ablation_study_async_engine.md) (campaign 2026-05-21). Driver:
 AsyncLLMEngine via `run_inference_configurable.py`. Dataset: 969/1000 of
 the MAI `layer1_delta_1k_test.txt` (31 dropped by 32 K-token filter, same
 set every run). Generation cap 1024 tokens, `temperature=0.7, top_p=0.9`.
@@ -942,7 +942,7 @@ gpu_memory_utilization, model_variant)` tuple.
 
 ### 14.4 A100 80 GB — Async-engine ablation (15 experiments)
 
-Source: [`EXPERIMENT_PLAN_ABLATION_STUDY.md`](EXPERIMENT_PLAN_ABLATION_STUDY.md).
+Source: [`gemma4/ablation_study_async_engine.md`](gemma4/ablation_study_async_engine.md).
 Real scripts:
 
 ```bash
@@ -1087,7 +1087,7 @@ Located in `examples/`. Drives the AsyncLLMEngine plan.
 
 ```bash
 ./experiment_runner.sh \
-  --plan EXPERIMENT_PLAN_ABLATION_STUDY.md \
+  --plan gemma4/ablation_study_async_engine.md \
   --dataset layer1_delta_1k_test.txt \
   --gpu-mem-util 0.92 \
   --output-cap 1024 \
@@ -1117,7 +1117,7 @@ python bench_offline.py \
   --out ./prodshape_results/anchor-fp8-sc1/
 ```
 
-### 16.3 Quick scenarios (from `EXPERIMENT_QUICKSTART.md`)
+### 16.3 Quick scenarios (from [`gemma4/quickstart.md`](gemma4/quickstart.md))
 
 **FlashInfer vs FA2 quick check** (will land on TRITON_ATTN for Gemma 4):
 
@@ -1147,8 +1147,8 @@ done
 
 ## 17. Dataset analysis (MAI `layer1_delta`)
 
-Source: `dataset_analysis_full.md` + the dataset section of
-`EXPERIMENT_PLAN_ABLATION_STUDY.md`.
+Source: [`gemma4/dataset_analysis.md`](gemma4/dataset_analysis.md) + the dataset section of
+[`gemma4/ablation_study_async_engine.md`](gemma4/ablation_study_async_engine.md).
 
 | Dataset | Rows | p50 in tokens | p95 in tokens | mean out tokens | p50 / max out tokens |
 |---|---|---|---|---|---|
@@ -1338,7 +1338,7 @@ re-run Attempt 1 as a regression test.
 
 Two distinct fix sets, kept for institutional memory.
 
-### 21.1 Framework code-review (pre-campaign) — `CODE_REVIEW_FIXES.md`
+### 21.1 Framework code-review (pre-campaign) — [`gemma4/framework_code_review.md`](gemma4/framework_code_review.md)
 
 Eight bugs caught before the ablation framework ever ran a real experiment.
 
@@ -1353,7 +1353,7 @@ Eight bugs caught before the ablation framework ever ran a real experiment.
 | 7 | 🟢 LOW | Background `nvidia-smi` monitor PID survived parent script errors. | `kill ${MONITOR_PID} 2>/dev/null || true` on every exit path. |
 | 8 | 🟢 LOW | `cd /nvmedata/chenw/vllm-ra/examples` without check. | `set -e` + explicit `cd … || exit 1`. |
 
-### 21.2 Campaign-time fixes — from `EXPERIMENT_PLAN_ABLATION_STUDY.md` "Fix history"
+### 21.2 Campaign-time fixes — from [`gemma4/ablation_study_async_engine.md`](gemma4/ablation_study_async_engine.md) "Fix history"
 
 Eight further fixes between first run attempt and final successful sweep:
 
@@ -1395,7 +1395,7 @@ Eight further fixes between first run attempt and final successful sweep:
 
 ### 21.3 Known gaps in the captured data
 
-Per source `EXPERIMENT_PLAN_ABLATION_STUDY.md`:
+Per source [`gemma4/ablation_study_async_engine.md`](gemma4/ablation_study_async_engine.md):
 
 1. **MTP acceptance rate (no data).** vLLM emitted no `SpecDecoding
    metrics:` lines in any `inference.log`. The `summary.md` heredoc was
@@ -1488,13 +1488,14 @@ of the merge; their content lives here in §s noted:
 |---|---|
 | `examples/README_GEMMA4_FP8.md` | §1, §4, §5, §6 |
 | `examples/GEMMA4_MOE_OPTIMIZATION_GUIDE.md` | §2, §8, §9, §10, §11 |
-| `examples/EXPERIMENT_PLAN_ABLATION_STUDY.md` | §13.4, §15, §17, §21 |
-| `examples/EXPERIMENT_LOG_001_MOE_ANALYSIS.md` | §8 |
-| `examples/EXPERIMENT_LOG_TEMPLATE.md` | §22 |
-| `examples/EXPERIMENT_QUICKSTART.md` | §16 |
-| `examples/README_FLASH_ATTENTION.md` | §7 |
-| `examples/CODE_REVIEW_FIXES.md` | §21 |
-| `examples/dataset_analysis_full.md` | §17 |
+| `examples/gemma4/ablation_study_async_engine.md` | §13.4, §15, §17, §21 |
+| `examples/gemma4/moe_bottleneck_analysis.md` | §8 |
+| `examples/gemma4/experiment_log_template.md` | §22 |
+| `examples/gemma4/quickstart.md` | §16 |
+| `examples/gemma4/flash_attention_setup.md` | §7 |
+| `examples/gemma4/framework_code_review.md` | §21 |
+| `examples/gemma4/dataset_analysis.md` | §17 |
+| `examples/gemma4/environment_setup.md` | §14 |
 | `benchmarks/gemma4_moe_fp8/ablation_results/summary.md` | §13.3 |
 | `benchmarks/gemma4_moe_fp8/BENCHMARK_LOG.md` | §13.2, §14.2 |
 | `benchmarks/gemma4_moe_fp8/ABLATION_EXPERIMENT_PLAN.md` | §15, §14.3 |

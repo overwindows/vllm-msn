@@ -236,7 +236,7 @@ cd /nvmedata/chenw/vllm-ra/examples || exit 1
 - ✓ Script syntax valid
 - ✓ Dry run works
 
-### 3. `CODE_REVIEW_FIXES.md` (this document)
+### 3. `framework_code_review.md` (this document)
 **Purpose:** Document all bugs found and fixed
 **Why:** Transparency and future reference
 
@@ -451,7 +451,7 @@ E017: Batch=512  # Push limits
 ### New Files: 3
 - `run_inference_configurable.py` (essential)
 - `test_ablation_setup.sh` (validation)
-- `CODE_REVIEW_FIXES.md` (documentation)
+- `framework_code_review.md` (documentation)
 
 ### Testing: 100% Pass
 - ✓ Syntax validation
