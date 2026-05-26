@@ -4,7 +4,7 @@
 # Usage:
 #   ./run_ablation.sh E001               # single experiment, sc1, 2 reps
 #   ./run_ablation.sh E001,E003,E006     # comma-separated list
-#   ./run_ablation.sh --all              # all 15 experiments
+#   ./run_ablation.sh --all              # all 16 experiments
 #   ./run_ablation.sh E011 --scenario sc2 --reps 3
 #
 # Environment variables (can override before calling):
@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $RUN_ALL -eq 1 ]]; then
-  EXP_IDS="E001,E002,E003,E004,E005,E006,E007,E008,E009,E010,E011,E012,E013,E014,E015"
+  EXP_IDS="E001,E002,E003,E004,E005,E006,E007,E008,E009,E010,E011,E012,E013,E014,E015,E016"
 fi
 
 if [[ -z "$EXP_IDS" ]]; then
@@ -83,10 +83,9 @@ set_env_for_exp() {
   export VLLM_USE_FLASHINFER_SAMPLER="0"
 
   # VLLM_USE_FLASHINFER_MOE_FP8: needed for FP8 MoE on H100 (sm_90+), must be 0 on A100.
-  # Only enable for experiments that use FP8 weights (E002–E015 except E001, E015, E014 where
-  # we still probe the compute cap but leave at 0 for safety on A100).
+  # Only enable for experiments that use FP8 weights (E002–E013).
   case "$exp" in
-    E001|E014|E015)
+    E001|E014|E015|E016)
       # BF16 weights — FlashInfer FP8 MoE is irrelevant; keep 0
       export VLLM_USE_FLASHINFER_MOE_FP8="0"
       ;;

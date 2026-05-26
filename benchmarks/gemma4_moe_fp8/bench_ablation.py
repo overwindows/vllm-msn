@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ablation-study benchmark for Gemma 4 26B MoE FP8.
 
-Runs one experiment from a 15-config ablation matrix using vllm.LLM offline.
+Runs one experiment from a 16-config ablation matrix using vllm.LLM offline.
 Replicates the config design from examples/EXPERIMENT_PLAN_ABLATION_STUDY.md
 but drives it through the bench_offline.py throughput framework so results
 are directly comparable to the sc1/sc2 H100 sweep.
@@ -12,7 +12,7 @@ run_ablation.sh which sets VLLM_ATTENTION_BACKEND etc. and then execs this.
 
 Usage (via run_ablation.sh):
     run_ablation.sh E001            # single experiment
-    run_ablation.sh --all           # all 15 experiments sequentially
+    run_ablation.sh --all           # all 16 experiments sequentially
     run_ablation.sh E006 E011 E013  # subset
 
 Direct single-experiment call (env vars must already be set):
@@ -41,7 +41,7 @@ CSV_PATH = OUT_DIR / "all_runs.csv"
 
 CSV_FIELDS = [
     "ts", "exp_id", "label", "scenario",
-    "quantization", "kv_cache_dtype", "attention_backend",
+    "dtype", "quantization", "kv_cache_dtype", "attention_backend",
     "enforce_eager", "mtp", "mtp_k",
     "max_num_seqs", "gpu_memory_utilization", "model_variant",
     "num_prompts", "output_len_cap", "max_model_len", "max_num_batched_tokens",
@@ -90,12 +90,13 @@ MODEL_ASSISTANT = os.environ.get(
 )
 
 # ---------------------------------------------------------------------------
-# 15-experiment ablation matrix
+# 16-experiment ablation matrix
 # Derived from examples/EXPERIMENT_PLAN_ABLATION_STUDY.md (A100 run 2026-05-21)
 # and adapted for H100 NVL where noted.
 #
 # Each entry:
 #   label                  : short human-readable tag
+#   dtype                  : "bfloat16" | "float16"
 #   quantization           : None | "fp8"
 #   kv_cache_dtype         : "auto" | "fp8_e4m3"
 #   enforce_eager          : True = no CUDA graphs; False = CUDA graphs enabled
@@ -127,6 +128,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E001": dict(
         label="BF16 baseline — matches REPRODUCE_PRODSHAPE sc1",
+        dtype="bfloat16",
         quantization=None,
         kv_cache_dtype="auto",
         enforce_eager=True,
@@ -141,6 +143,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E002": dict(
         label="+FP8 weights (kv cache stays BF16 / auto)",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=True,
@@ -156,6 +159,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E003": dict(
         label="+FP8 KV cache (fp8_e4m3) — FAIL expected on A100",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="fp8_e4m3",
         enforce_eager=True,
@@ -169,6 +173,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E004": dict(
         label="+CUDA graphs (enforce_eager=False)",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -182,6 +187,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E005": dict(
         label="+MTP speculative decoding (k=5)",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -195,6 +201,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E006": dict(
         label="+text-only model (vision stripped)",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -208,6 +215,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E007": dict(
         label="batch sweep: mns=64",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -218,6 +226,7 @@ EXPERIMENTS: dict[str, dict] = {
     ),
     "E008": dict(
         label="batch sweep: mns=192",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -228,6 +237,7 @@ EXPERIMENTS: dict[str, dict] = {
     ),
     "E009": dict(
         label="batch sweep: mns=256",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -241,6 +251,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E010": dict(
         label="gpu_mem sweep: 0.80",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -251,6 +262,7 @@ EXPERIMENTS: dict[str, dict] = {
     ),
     "E011": dict(
         label="gpu_mem sweep: 0.95",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -264,6 +276,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E012": dict(
         label="no MTP at optimal (isolates MTP contribution)",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -277,6 +290,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E013": dict(
         label="no CUDA graphs at optimal (isolates CG contribution)",
+        dtype="bfloat16",
         quantization="fp8",
         kv_cache_dtype="auto",
         enforce_eager=True,
@@ -290,6 +304,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E014": dict(
         label="BF16 weights at optimal config (isolates FP8 weight contribution)",
+        dtype="bfloat16",
         quantization=None,
         kv_cache_dtype="auto",
         enforce_eager=False,
@@ -303,6 +318,7 @@ EXPERIMENTS: dict[str, dict] = {
     # ------------------------------------------------------------------
     "E015": dict(
         label="BF16 reference (text-only, no opts)",
+        dtype="bfloat16",
         quantization=None,
         kv_cache_dtype="auto",
         enforce_eager=True,
@@ -310,6 +326,20 @@ EXPERIMENTS: dict[str, dict] = {
         max_num_seqs=128,
         gpu_memory_utilization=0.90,
         model_variant="text_only",
+    ),
+    # ------------------------------------------------------------------
+    # E016 — FP16 with CUDA graphs (full model)
+    # ------------------------------------------------------------------
+    "E016": dict(
+        label="FP16 + CUDA graphs (full model)",
+        dtype="float16",
+        quantization=None,
+        kv_cache_dtype="auto",
+        enforce_eager=False,
+        mtp=False,   mtp_k=0,
+        max_num_seqs=128,
+        gpu_memory_utilization=0.90,
+        model_variant="full",
     ),
 }
 
@@ -397,6 +427,7 @@ def run_experiment(
         f"  Scenario   : {scenario}  ({sc_cfg['num_prompts']} prompts, "
         f"max_model_len={sc_cfg['max_model_len']})\n"
         f"  Model      : {model}\n"
+        f"  dtype={exp_cfg.get('dtype', 'bfloat16')}  "
         f"  quantization={exp_cfg['quantization']}  "
         f"kv_cache_dtype={exp_cfg['kv_cache_dtype']}  "
         f"enforce_eager={exp_cfg['enforce_eager']}\n"
@@ -419,6 +450,7 @@ def run_experiment(
     llm_kwargs: dict = dict(
         model=model,
         trust_remote_code=True,
+        dtype=exp_cfg.get("dtype", "bfloat16"),
         max_model_len=sc_cfg["max_model_len"],
         max_num_seqs=exp_cfg["max_num_seqs"],
         max_num_batched_tokens=sc_cfg["max_num_batched_tokens"],
@@ -479,6 +511,7 @@ def run_experiment(
             "exp_id": exp_id,
             "label": exp_cfg["label"],
             "scenario": scenario,
+            "dtype": exp_cfg.get("dtype", "bfloat16"),
             "quantization": str(exp_cfg["quantization"]),
             "kv_cache_dtype": exp_cfg["kv_cache_dtype"],
             "attention_backend": os.environ.get("VLLM_ATTENTION_BACKEND", "unset"),

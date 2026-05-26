@@ -34,6 +34,8 @@ for this model.
 ## Contents
 
 - [1. Setup and image](#1-setup-and-image)
+  - [Bare-metal env setup (no Docker)](#bare-metal-env-setup-no-docker)
+  - [Hugging Face model download](#hugging-face-model-download)
 - [2. Prod-shape benchmark (H100 NVL)](#2-prod-shape-benchmark-h100-nvl)
   - [2.1 Workload and engine settings](#21-workload-and-engine-settings)
   - [2.2 Datasets (one-time)](#22-datasets-one-time)
@@ -91,6 +93,78 @@ mode-3 + CUDA-graph capture). Warm (compile cache + weights cached): ~3 min
 Model footprint on GPU at load: **48.5 GiB**. KV cache budget at
 `gpu_memory_utilization=0.9` and `max_model_len=32768`: **30.5 GiB** ≈
 133 312 tokens (12.79× concurrency).
+
+### Bare-metal env setup (no Docker)
+
+If Docker is unavailable (e.g. running directly on an Azure ML compute
+node), install vLLM and dependencies into a dedicated conda env using the
+upstream **precompiled-kernel** workflow. This avoids the 30–60 min
+source build and uses the exact torch version vLLM was tested with.
+
+```bash
+# 1. Create env. Python 3.11 is what the precompiled wheels target.
+source /opt/conda/etc/profile.d/conda.sh
+conda create -n vllm-ablation python=3.11 pip -y
+conda activate vllm-ablation
+pip install --upgrade pip wheel "setuptools>=77.0.3,<81.0.0" packaging jinja2
+
+# 2. Install vLLM editable, using the precompiled kernel wheel from the
+#    upstream repo. Pip will pull the matching torch (2.11.0+cu130).
+cd /path/to/vllm-msn
+export VLLM_USE_PRECOMPILED=1
+pip install -e .
+
+# 3. Verify (A100 80 GB shown):
+python -c "import vllm, torch; \
+print('vllm', vllm.__version__); \
+print('torch', torch.__version__, 'cuda', torch.version.cuda); \
+print('device', torch.cuda.get_device_name(0))"
+```
+
+Expected output:
+
+```
+vllm 0.1.dev....precompiled
+torch 2.11.0+cu130 cuda 13.0
+device NVIDIA A100-SXM4-80GB
+```
+
+> The host CUDA driver must be new enough for cu130. `nvidia-smi` on the
+> A100 80 GB used for §4 reports driver 535.x / CUDA 12.4 toolkit; that is
+> sufficient because the cu130 PyTorch wheel ships its own CUDA runtime
+> and only the driver API is loaded from the host.
+>
+> Do **not** mix `VLLM_USE_PRECOMPILED=1` with `use_existing_torch.py` or
+> a from-source build: the precompiled wheel is ABI-locked to torch 2.11
+> and will fail to import against older torch (missing
+> `torch/headeronly/util/Float8_e4m3fnuz.h`).
+
+### Hugging Face model download
+
+```bash
+# 4. Log in once (token never traverses the shell history if you let `hf`
+#    prompt for it). Requires that you have accepted the Gemma license at
+#    https://huggingface.co/google/gemma-4-26B-A4B-it on your HF account.
+pip install -U "huggingface_hub[cli]"
+export HF_HOME=/scratch/hf_cache HF_XET_HIGH_PERFORMANCE=1
+hf auth login        # paste token at prompt
+
+# 5. Download the model (~49 GB) to the same HF cache.
+hf download google/gemma-4-26B-A4B-it --cache-dir /scratch/hf_cache
+
+# (optional, for MTP experiments E005, E006, E010–E014)
+hf download google/gemma-4-26B-A4B-it-assistant --cache-dir /scratch/hf_cache
+```
+
+After the download, point the ablation runner at the local cache by
+either using the repo id directly (HF resolves through `HF_HOME`) or by
+setting the explicit paths:
+
+```bash
+export GEMMA4_MODEL_PATH=$(hf download google/gemma-4-26B-A4B-it \
+                            --cache-dir /scratch/hf_cache | tail -1)
+# GEMMA4_TEXT_ONLY_MODEL_PATH and GEMMA4_ASSISTANT_MODEL_PATH likewise.
+```
 
 ---
 
