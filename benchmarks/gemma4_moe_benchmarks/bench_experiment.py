@@ -34,8 +34,10 @@ from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Output paths (sibling to bench_offline.py results)
+# Override the directory via BENCH_RESULTS_DIR so different hardware rounds
+# (e.g. results_A100_80G vs results_A100_40G_mock) don't overwrite each other.
 # ---------------------------------------------------------------------------
-OUT_DIR = Path("results")
+OUT_DIR = Path(os.environ.get("BENCH_RESULTS_DIR", "results"))
 OUT_DIR.mkdir(exist_ok=True)
 CSV_PATH = OUT_DIR / "all_runs.csv"
 
@@ -237,6 +239,29 @@ EXPERIMENTS: dict[str, dict] = {
         model_variant="text_only",
     ),
     # ------------------------------------------------------------------
+    # E017–E018 — low max_num_seqs sweep for tighter-memory GPUs (e.g. 40G)
+    # ------------------------------------------------------------------
+    "E017": dict(
+        label="low-mns sweep: mns=16",
+        quantization="fp8",
+        kv_cache_dtype="auto",
+        enforce_eager=False,
+        mtp=True,    mtp_k=5,
+        max_num_seqs=16,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
+    "E018": dict(
+        label="low-mns sweep: mns=32",
+        quantization="fp8",
+        kv_cache_dtype="auto",
+        enforce_eager=False,
+        mtp=True,    mtp_k=5,
+        max_num_seqs=32,
+        gpu_memory_utilization=0.90,
+        model_variant="text_only",
+    ),
+    # ------------------------------------------------------------------
     # E010–E011 — gpu_memory_utilization sweep (from E006)
     # ------------------------------------------------------------------
     "E010": dict(
@@ -403,6 +428,8 @@ def run_experiment(
     from transformers import AutoTokenizer
 
     model = MODEL_TEXT_ONLY if exp_cfg["model_variant"] == "text_only" else MODEL_BASE
+    mem_scale = float(os.environ.get("GPU_MEM_SCALE", "1.0"))
+    gpu_mem_util = exp_cfg["gpu_memory_utilization"] * mem_scale
 
     print(
         f"\n{'='*70}\n"
@@ -414,7 +441,8 @@ def run_experiment(
         f"kv_cache_dtype={exp_cfg['kv_cache_dtype']}  "
         f"enforce_eager={exp_cfg['enforce_eager']}\n"
         f"  max_num_seqs={exp_cfg['max_num_seqs']}  "
-        f"gpu_memory_utilization={exp_cfg['gpu_memory_utilization']}  "
+        f"gpu_memory_utilization(planned)={exp_cfg['gpu_memory_utilization']}  "
+        f"gpu_memory_utilization(effective)={gpu_mem_util:.3f}  "
         f"mtp={exp_cfg['mtp']} k={exp_cfg['mtp_k']}\n"
         f"  VLLM_ATTENTION_BACKEND={os.environ.get('VLLM_ATTENTION_BACKEND', 'unset')}\n"
         f"  VLLM_USE_FLASHINFER_MOE_FP8="
@@ -428,6 +456,17 @@ def run_experiment(
     prompts = render_chat(tok, raw_prompts)
     print(f"loaded {len(prompts)} prompts from {sc_cfg['dataset']}", flush=True)
 
+    # Optional scaling of gpu_memory_utilization, e.g. to mock A100 40 GB on an
+    # 80 GB device: GPU_MEM_SCALE=0.5 caps vLLM's KV-cache budget at half the
+    # planned value (40/80 of total HBM). BF16 experiments will not fit on a
+    # real 40 GB device and are expected to OOM here as well.
+    if mem_scale != 1.0:
+        print(
+            f"  GPU_MEM_SCALE={mem_scale}  ->  effective gpu_memory_utilization="
+            f"{gpu_mem_util:.3f} (planned {exp_cfg['gpu_memory_utilization']})",
+            flush=True,
+        )
+
     # Build LLM kwargs
     llm_kwargs: dict = dict(
         model=model,
@@ -435,7 +474,7 @@ def run_experiment(
         max_model_len=sc_cfg["max_model_len"],
         max_num_seqs=exp_cfg["max_num_seqs"],
         max_num_batched_tokens=sc_cfg["max_num_batched_tokens"],
-        gpu_memory_utilization=exp_cfg["gpu_memory_utilization"],
+        gpu_memory_utilization=gpu_mem_util,
         enforce_eager=exp_cfg["enforce_eager"],
         seed=0,
     )
@@ -499,7 +538,7 @@ def run_experiment(
             "mtp": exp_cfg["mtp"],
             "mtp_k": exp_cfg["mtp_k"],
             "max_num_seqs": exp_cfg["max_num_seqs"],
-            "gpu_memory_utilization": exp_cfg["gpu_memory_utilization"],
+            "gpu_memory_utilization": gpu_mem_util,
             "model_variant": exp_cfg["model_variant"],
             "num_prompts": len(prompts),
             "output_len_cap": sc_cfg["output_len"],

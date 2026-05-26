@@ -4,7 +4,7 @@
 # Usage:
 #   ./run_experiments.sh E001               # single experiment, sc1, 2 reps
 #   ./run_experiments.sh E001,E003,E006     # comma-separated list
-#   ./run_experiments.sh --all              # all 15 experiments
+#   ./run_experiments.sh --all              # all 16 experiments
 #   ./run_experiments.sh E011 --scenario sc2 --reps 3
 #
 # Environment variables (can override before calling):
@@ -52,7 +52,7 @@ export GEMMA4_MODEL_PATH GEMMA4_TEXT_ONLY_MODEL_PATH GEMMA4_ASSISTANT_MODEL_PATH
 # ---------------------------------------------------------------------------
 # Parse args
 # ---------------------------------------------------------------------------
-EXP_IDS=""
+EXP_IDS=()
 SCENARIO="sc1"
 REPS=2
 RUN_ALL=0
@@ -62,6 +62,17 @@ while [[ $# -gt 0 ]]; do
     --all)          RUN_ALL=1; shift ;;
     --scenario)     SCENARIO="$2"; shift 2 ;;
     --reps)         REPS="$2"; shift 2 ;;
+    --mock-a100-40g)
+      # Mock A100 40 GB on an A100 80 GB device by halving the planned
+      # gpu_memory_utilization values (KV-cache budget = 40/80 of original).
+      # Note: BF16 weights (~48 GB) exceed 40 GB and are expected to OOM.
+      export GPU_MEM_SCALE=0.5
+      shift
+      ;;
+    --gpu-mem-scale)
+      export GPU_MEM_SCALE="$2"
+      shift 2
+      ;;
     --list)
       python3 bench_experiment.py --exp E001 --list
       exit 0
@@ -70,18 +81,21 @@ while [[ $# -gt 0 ]]; do
       sed -n '2,22p' "$0"     # print the usage block at top of script
       exit 0
       ;;
-    *)              EXP_IDS="$1"; shift ;;
+    *)              EXP_IDS+=("$1"); shift ;;
   esac
 done
 
 if [[ $RUN_ALL -eq 1 ]]; then
-  EXP_IDS="E001,E002,E003,E004,E005,E006,E007,E008,E009,E010,E011,E012,E013,E014,E015,E016"
+  EXP_IDS=("E001,E002,E003,E004,E005,E006,E007,E008,E009,E010,E011,E012,E013,E014,E015,E016")
 fi
 
-if [[ -z "$EXP_IDS" ]]; then
+if [[ ${#EXP_IDS[@]} -eq 0 ]]; then
   echo "ERROR: no experiment ID provided. Use --all or specify e.g. E001"
   exit 1
 fi
+
+# Normalize: allow both comma-separated and space-separated experiment IDs.
+EXP_IDS_CSV=$(IFS=','; echo "${EXP_IDS[*]}")
 
 # ---------------------------------------------------------------------------
 # Per-experiment environment variable table.
@@ -105,14 +119,14 @@ set_env_for_exp() {
   export VLLM_USE_FLASHINFER_SAMPLER="0"
 
   # VLLM_USE_FLASHINFER_MOE_FP8: needed for FP8 MoE on H100 (sm_90+), must be 0 on A100.
-  # Only enable for experiments that use FP8 weights (E002–E013).
+  # Only enable for experiments that use FP8 weights (E002–E013, E017–E018).
   # E001, E014, E015, E016 use full-precision weights (BF16), so FP8 MoE is irrelevant.
   case "$exp" in
     E001|E014|E015|E016)
       # BF16 weights — FlashInfer FP8 MoE is irrelevant; keep 0
       export VLLM_USE_FLASHINFER_MOE_FP8="0"
       ;;
-    E002|E003|E004|E005|E006|E007|E008|E009|E010|E011|E012|E013)
+    E002|E003|E004|E005|E006|E007|E008|E009|E010|E011|E012|E013|E017|E018)
       # FP8 weights: enable FlashInfer FP8 MoE on H100, keep off on A100
       COMPUTE_CAP=$(python3 -c "import torch; cc=torch.cuda.get_device_capability(); print(cc[0]*10+cc[1])" 2>/dev/null || echo "0")
       if [[ "$COMPUTE_CAP" -ge 90 ]]; then
@@ -135,13 +149,15 @@ set_env_for_exp() {
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
-IFS=',' read -ra EXPS <<< "$EXP_IDS"
+IFS=',' read -ra EXPS <<< "$EXP_IDS_CSV"
 
 echo "=================================================="
 echo "  Ablation benchmark"
-echo "  Experiments : ${EXP_IDS}"
+echo "  Experiments : ${EXP_IDS_CSV}"
 echo "  Scenario    : ${SCENARIO}"
 echo "  Reps        : ${REPS}"
+echo "  GPU_MEM_SCALE: ${GPU_MEM_SCALE:-1.0}"
+echo "  BENCH_RESULTS_DIR: ${BENCH_RESULTS_DIR:-results}"
 echo "  $(date)"
 echo "=================================================="
 
@@ -167,7 +183,7 @@ done
 echo ""
 echo "=================================================="
 echo "  Ablation run finished"
-echo "  Results: results/all_runs.csv"
+echo "  Results: ${BENCH_RESULTS_DIR:-results}/all_runs.csv"
 if [[ ${#FAILED[@]} -gt 0 ]]; then
   echo "  FAILED experiments: ${FAILED[*]}"
   exit 1
