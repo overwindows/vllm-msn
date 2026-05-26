@@ -517,9 +517,9 @@ H100 BF16 baseline from Sweep v2 (Section 6):
 
 | Script | Purpose |
 |--------|---------|
-| [`bench_ablation.py`](bench_ablation.py) | Ablation driver — 15-experiment matrix encoded as dicts; uses `vllm.LLM` offline |
-| [`run_ablation.sh`](run_ablation.sh) | Shell wrapper — sets `VLLM_ATTENTION_BACKEND`, `VLLM_USE_FLASHINFER_MOE_FP8` per experiment before Python import; handles --all / subset runs |
-| [`analyze_ablation.py`](analyze_ablation.py) | Reads `ablation_results/all_runs.csv`, prints comparison table vs A100 baselines, writes `ablation_results/summary.md` |
+| [`bench_experiment.py`](bench_experiment.py) | Ablation driver — 15-experiment matrix encoded as dicts; uses `vllm.LLM` offline |
+| [`run_experiments.sh`](run_experiments.sh) | Shell wrapper — sets `VLLM_ATTENTION_BACKEND`, `VLLM_USE_FLASHINFER_MOE_FP8` per experiment before Python import; handles --all / subset runs |
+| [`analyze_results.py`](analyze_results.py) | Reads `results/all_runs.csv`, prints comparison table vs A100 baselines, writes `results/summary.md` |
 
 ### Experiment matrix (carries over from A100 study)
 
@@ -544,8 +544,8 @@ H100 BF16 baseline from Sweep v2 (Section 6):
 ### How to run
 
 ```bash
-cd benchmarks/gemma4_moe_fp8
-chmod +x run_ablation.sh
+cd benchmarks/gemma4_moe_benchmarks
+chmod +x run_experiments.sh
 
 # Export model paths (adjust to your mount points):
 export GEMMA4_MODEL_PATH=/mnt/models/gemma-4-26B-A4B-it
@@ -553,21 +553,21 @@ export GEMMA4_TEXT_ONLY_MODEL_PATH=/mnt/models/gemma-4-26B-A4B-it-text-only
 export GEMMA4_ASSISTANT_MODEL_PATH=/mnt/models/gemma-4-26B-A4B-it-assistant
 
 # Run all 15 experiments on sc1 (≈ 4–6 h on H100 NVL):
-./run_ablation.sh --all --scenario sc1 --reps 2
+./run_experiments.sh --all --scenario sc1 --reps 2
 
 # Run the optimal config only (E011) to validate quickly:
-./run_ablation.sh E011 --scenario sc1 --reps 3
+./run_experiments.sh E011 --scenario sc1 --reps 3
 
 # Run the key comparison subset (baseline, best, MTP ablation):
-./run_ablation.sh E001,E011,E013 --scenario sc1 --reps 2
+./run_experiments.sh E001,E011,E013 --scenario sc1 --reps 2
 
 # After runs complete, generate comparison table:
-python3 analyze_ablation.py
+python3 analyze_results.py
 ```
 
-Results are written to `ablation_results/all_runs.csv` (cumulative) and
-`ablation_results/<exp>_<scenario>_rep<N>.json` (per-run).
-Summary table: `ablation_results/summary.md`.
+Results are written to `results/all_runs.csv` (cumulative) and
+`results/<exp>_<scenario>_rep<N>.json` (per-run).
+Summary table: `results/summary.md`.
 
 ### Expected outcomes (H100 vs A100 predictions)
 
@@ -585,7 +585,7 @@ Summary table: `ablation_results/summary.md`.
 
 _To be filled in after runs complete._
 
-See `ablation_results/summary.md` for auto-generated comparison table.
+See `results/summary.md` for auto-generated comparison table.
 
 
 

@@ -8,16 +8,16 @@ are directly comparable to the sc1/sc2 H100 sweep.
 
 IMPORTANT — environment variables must be set BEFORE this script is imported
 (before vllm is imported).  Do NOT call this script directly.  Use
-run_ablation.sh which sets VLLM_ATTENTION_BACKEND etc. and then execs this.
+run_experiments.sh which sets VLLM_ATTENTION_BACKEND etc. and then execs this.
 
-Usage (via run_ablation.sh):
-    run_ablation.sh E001            # single experiment
-    run_ablation.sh --all           # all 15 experiments sequentially
-    run_ablation.sh E006 E011 E013  # subset
+Usage (via run_experiments.sh):
+    run_experiments.sh E001            # single experiment
+    run_experiments.sh --all           # all 15 experiments sequentially
+    run_experiments.sh E006 E011 E013  # subset
 
 Direct single-experiment call (env vars must already be set):
     VLLM_ATTENTION_BACKEND=FLASH_ATTN \\
-    python3 bench_ablation.py --exp E001 --scenario sc1 --reps 2
+    python3 bench_experiment.py --exp E001 --scenario sc1 --reps 2
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Output paths (sibling to bench_offline.py results)
 # ---------------------------------------------------------------------------
-OUT_DIR = Path("ablation_results")
+OUT_DIR = Path("results")
 OUT_DIR.mkdir(exist_ok=True)
 CSV_PATH = OUT_DIR / "all_runs.csv"
 
@@ -108,7 +108,7 @@ MODEL_ASSISTANT = os.environ.get(
 # Note: there is NO attention_backend field in these dicts.  Gemma 4 has
 # heterogeneous attention head dims (256 and 512), so vLLM forces TRITON_ATTN
 # at runtime regardless of VLLM_ATTENTION_BACKEND.  The env var is set by
-# run_ablation.sh for logging purposes only — it has no effect on this model.
+# run_experiments.sh for logging purposes only — it has no effect on this model.
 #
 # A100 run notes (sm_80):
 #   - VLLM_USE_FLASHINFER_MOE_FP8=0 on A100 — FlashInfer FP8 MoE requires
@@ -622,7 +622,7 @@ def main() -> int:
             return 1
         exp_cfg = EXPERIMENTS[exp_id]
 
-        # Log the attention backend env var (set by run_ablation.sh before import).
+        # Log the attention backend env var (set by run_experiments.sh before import).
         # Note: Gemma 4 has heterogeneous attention head dims (256 and 512), so
         # vLLM forces TRITON_ATTN at runtime regardless of VLLM_ATTENTION_BACKEND.
         # The env var is logged for reproducibility but has no effect on this model.

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# run_ablation.sh — Launch one or more ablation experiments.
+# run_experiments.sh — Launch one or more ablation experiments.
 #
 # Usage:
-#   ./run_ablation.sh E001               # single experiment, sc1, 2 reps
-#   ./run_ablation.sh E001,E003,E006     # comma-separated list
-#   ./run_ablation.sh --all              # all 15 experiments
-#   ./run_ablation.sh E011 --scenario sc2 --reps 3
+#   ./run_experiments.sh E001               # single experiment, sc1, 2 reps
+#   ./run_experiments.sh E001,E003,E006     # comma-separated list
+#   ./run_experiments.sh --all              # all 15 experiments
+#   ./run_experiments.sh E011 --scenario sc2 --reps 3
 #
 # Environment variables (can override before calling):
 #   GEMMA4_MODEL_PATH            full model checkpoint path
@@ -13,7 +13,7 @@
 #   GEMMA4_ASSISTANT_MODEL_PATH  MTP assistant model path
 #
 # The script resolves VLLM_ATTENTION_BACKEND and FlashInfer knobs per
-# experiment ID rather than having them hard-coded in bench_ablation.py
+# experiment ID rather than having them hard-coded in bench_experiment.py
 # (vllm imports freeze env vars at import time, so they must be set here).
 
 set -euo pipefail
@@ -22,15 +22,31 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------------------------
 # CUDA runtime library path (required for precompiled vLLM binaries)
 # ---------------------------------------------------------------------------
-# Precompiled vLLM binaries need CUDA 13 runtime from nvidia-cudart-cu13 package
-export LD_LIBRARY_PATH=/root/miniconda3/envs/vllm-ablation/lib/python3.10/site-packages/nvidia/cu13/lib:${LD_LIBRARY_PATH:-}
+# Precompiled vLLM binaries need CUDA runtime libs from the active env's
+# nvidia-* site-packages. Auto-detect from the current python's site-packages
+# so this works under different conda/venv locations.
+_NVIDIA_LIB_GLOBS=$(python3 - <<'PY' 2>/dev/null || true
+import glob, os, sysconfig
+sp = sysconfig.get_paths()["purelib"]
+roots = []
+for sub in ("nvidia/cu13/lib", "nvidia/cu12/lib"):
+    roots.extend(glob.glob(os.path.join(sp, sub)))
+# Also include all nvidia/*/lib dirs (cudnn, cublas, etc.)
+roots.extend(glob.glob(os.path.join(sp, "nvidia", "*", "lib")))
+print(":".join(sorted(set(roots))))
+PY
+)
+if [[ -n "${_NVIDIA_LIB_GLOBS}" ]]; then
+  export LD_LIBRARY_PATH="${_NVIDIA_LIB_GLOBS}:${LD_LIBRARY_PATH:-}"
+fi
 
 # ---------------------------------------------------------------------------
-# Default model paths (override via env)
+# Default model paths (override via env). Defaults point to HF model IDs so
+# weights are pulled from the Hugging Face hub on first use.
 # ---------------------------------------------------------------------------
-: "${GEMMA4_MODEL_PATH:=/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it}"
-: "${GEMMA4_TEXT_ONLY_MODEL_PATH:=${GEMMA4_MODEL_PATH}-text-only}"
-: "${GEMMA4_ASSISTANT_MODEL_PATH:=/nvmedata/hf_checkpoints/gemma-4-26B-A4B-it-assistant}"
+: "${GEMMA4_MODEL_PATH:=google/gemma-4-26B-A4B-it}"
+: "${GEMMA4_TEXT_ONLY_MODEL_PATH:=${GEMMA4_MODEL_PATH}}"
+: "${GEMMA4_ASSISTANT_MODEL_PATH:=google/gemma-4-26B-A4B-it-assistant}"
 export GEMMA4_MODEL_PATH GEMMA4_TEXT_ONLY_MODEL_PATH GEMMA4_ASSISTANT_MODEL_PATH
 
 # ---------------------------------------------------------------------------
@@ -47,7 +63,7 @@ while [[ $# -gt 0 ]]; do
     --scenario)     SCENARIO="$2"; shift 2 ;;
     --reps)         REPS="$2"; shift 2 ;;
     --list)
-      python3 bench_ablation.py --exp E001 --list
+      python3 bench_experiment.py --exp E001 --list
       exit 0
       ;;
     -h|--help)
@@ -136,8 +152,8 @@ for EXP in "${EXPS[@]}"; do
   echo ">>> Setting up environment for ${EXP}"
   set_env_for_exp "$EXP"
 
-  echo ">>> Launching bench_ablation.py --exp ${EXP} --scenario ${SCENARIO} --reps ${REPS}"
-  if python3 bench_ablation.py \
+  echo ">>> Launching bench_experiment.py --exp ${EXP} --scenario ${SCENARIO} --reps ${REPS}"
+  if python3 bench_experiment.py \
       --exp "${EXP}" \
       --scenario "${SCENARIO}" \
       --reps "${REPS}"; then
@@ -151,7 +167,7 @@ done
 echo ""
 echo "=================================================="
 echo "  Ablation run finished"
-echo "  Results: ablation_results/all_runs.csv"
+echo "  Results: results/all_runs.csv"
 if [[ ${#FAILED[@]} -gt 0 ]]; then
   echo "  FAILED experiments: ${FAILED[*]}"
   exit 1
