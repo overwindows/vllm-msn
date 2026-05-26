@@ -256,6 +256,82 @@ export GEMMA4_MODEL_PATH=/your/local/path/gemma-4-26B-A4B-it
 
 ---
 
+## Python environment setup
+
+### Creating the environment
+
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create conda environment for vLLM ablation study
+conda create -n vllm-ablation python=3.10 -y
+conda activate vllm-ablation
+
+# Install PyTorch 2.11.0 with CUDA 12.6 support
+pip install torch==2.11.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+
+# Install vLLM in editable mode (use VLLM_USE_PRECOMPILED=1 to avoid C++ build issues)
+# This allows testing Python-only changes (like Triton kernels) without recompiling C++/CUDA code
+cd /nvmedata/chenw/vllm-ra
+VLLM_USE_PRECOMPILED=1 pip install -e .
+
+# Install additional dependencies
+pip install transformers datasets
+```
+
+### System requirements
+
+| Component | Version | Notes |
+|---|---|---|
+| Python | 3.10.20 | via conda |
+| PyTorch | 2.11.0+cu126 | Requires CUDA 12.0+ |
+| CUDA Toolkit | 12.9 (or 11.8+) | System: /usr/local/cuda-12.9 |
+| CUDA Driver | 560.35.03 | Supports CUDA 12.6 |
+| GPU | A100 80GB PCIe | sm_80 compute capability |
+| CMake | 3.28.3 (system) | Avoid cmake-4.x Python package |
+| g++ | 9.4.0 | C++17 support required |
+
+### Known build issues and workarounds
+
+**Issue**: vLLM C++/CUDA extensions fail to build with CMake 4.x or mismatched CUDA versions.
+
+**Workaround**: Use `VLLM_USE_PRECOMPILED=1` for editable installs. This:
+- Skips recompiling C++/CUDA extensions
+- Still allows testing Python code changes (including Triton kernels)
+- Requires matching PyTorch CUDA version with system CUDA (both 12.x)
+
+**Alternative**: If full source build is needed:
+```bash
+# Remove cmake Python package (use system cmake 3.28.3)
+pip uninstall -y cmake
+
+# Ensure CUDA 12.x is in PATH (PyTorch 2.11 requires CUDA 12.0+)
+export CUDA_HOME=/usr/local/cuda-12.9
+export PATH=/usr/local/cuda-12.9/bin:$PATH
+
+# Build from source
+pip install -e . --no-build-isolation
+```
+
+### Verifying the installation
+
+```bash
+conda activate vllm-ablation
+python -c "import vllm; print(f'vLLM version: {vllm.__version__}')"
+python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}')"
+python -c "from vllm.model_executor.layers.gemma4_fused_ops import fused_dual_rmsnorm; print('Gemma4 fused ops OK')"
+```
+
+Expected output:
+```
+vLLM version: 0.21.1rc1.dev269+ge0959bd61.d20260526.precompiled
+PyTorch: 2.11.0+cu126, CUDA: 12.6
+Gemma4 fused ops OK
+```
+
+---
+
 ## Expected outcomes (A100 80 GB)
 
 H100 NVL reference numbers (from REPRODUCE_PRODSHAPE.md §6):
