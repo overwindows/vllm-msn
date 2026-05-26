@@ -50,6 +50,7 @@ A100_RESULTS: dict[str, dict] = {
     "E013": dict(output_tps=None,   label="no CUDA graphs at optimal (no old ref)"),
     "E014": dict(output_tps=None,   label="BF16 weights at optimal (no old ref)"),
     "E015": dict(output_tps=477.1,  label="BF16 ref text-only no opts — old A100 study E015"),
+    "E016": dict(output_tps=None,   label="BF16 + CUDA graphs only (no old ref)"),
 }
 
 
