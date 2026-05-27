@@ -875,7 +875,25 @@ Headline: best A100 80 GB result is **E011 — 1771.5 ± 31.2 output tok/s**
 (FP8 weights + CUDA graphs + MTP k=5 + text-only at `gpu_mem=0.95`),
 **2.184× the E001 BF16 baseline** (811.1 tok/s).
 
-Full table from
+These are the **final completed campaign numbers** from the raw per-rep file
+[`ablation_results/all_runs.csv`](ablation_results/all_runs.csv) (28 result
+rows + header), the run log
+[`ablation_results/run_sc1_delta_v2_20260526_213939.log`](ablation_results/run_sc1_delta_v2_20260526_213939.log),
+and the derived
+[`ablation_results/summary.md`](ablation_results/summary.md). The run ends
+with `Done.` / `E015 COMPLETED` and a clean engine shutdown. The trailing
+shell message
+`./run_ablation.sh: line 151: unexpected EOF while looking for matching '"'`
+appears after the benchmark summaries are printed, so it does **not** change
+the experiment results reported below.
+
+`all_runs.csv` is the canonical machine-readable record: one row per
+successful experiment repetition. With `--reps 2`, the completed sc1 ablation
+produced 28 rows because E003 failed on A100 as expected and therefore has no
+successful entries in the CSV.
+
+Aggregated table derived from
+[`ablation_results/all_runs.csv`](ablation_results/all_runs.csv) via
 [`ablation_results/summary.md`](ablation_results/summary.md):
 
 | Exp | Label | out tok/s | ±σ | vs E001 | old A100 ref | vs old A100 | Backend | eager | MTP | seqs | mem% |
@@ -912,6 +930,29 @@ The `vs old A100` column is therefore not a controlled comparison — it
 mixes driver, dataset, and output-cap changes. Use it as a sanity check
 that the new LLM-offline numbers are ≥ the old async numbers (they are,
 for every experiment that has a non-FAIL reference).
+
+#### Per-experiment averages from `all_runs.csv`
+
+Mean across reps, derived directly from
+[`ablation_results/all_runs.csv`](ablation_results/all_runs.csv). `stop` and
+`len` columns are summed across reps (out of 2 × 1000 = 2000 prompts).
+
+| Exp | Reps | Label | elapsed s | req/s | out tok/s | total tok/s | out len mean | stop | len |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| E001 | 2 | BF16 baseline — matches REPRODUCE_PRODSHAPE sc1 | 1979.1 | 0.5098 | 681.97 | 2903.49 | 1338.18 | 2000 | 0 |
+| E002 | 2 | +FP8 weights (kv cache stays BF16 / auto) | 1096.6 | 0.9124 | 1182.38 | 5158.84 | 1296.22 | 2000 | 0 |
+| E004 | 2 | +CUDA graphs (enforce_eager=False) | 876.5 | 1.1410 | 1479.88 | 6452.40 | 1297.08 | 2000 | 0 |
+| E005 | 2 | +MTP speculative decoding (k=5) | 658.3 | 1.5193 | 1975.95 | 8597.42 | 1300.61 | 2000 | 0 |
+| E006 | 2 | +text-only model (vision stripped) | 639.8 | 1.5631 | 2001.59 | 8813.99 | 1280.47 | 1998 | 2 |
+| E007 | 2 | batch sweep: mns=64 | 682.1 | 1.4661 | 1891.03 | 8280.83 | 1289.83 | 2000 | 0 |
+| E008 | 2 | batch sweep: mns=192 | 639.9 | 1.5629 | 2004.74 | 8816.18 | 1282.76 | 1998 | 2 |
+| E009 | 2 | batch sweep: mns=256 | 642.6 | 1.5562 | 2003.07 | 8785.43 | 1287.18 | 1999 | 1 |
+| E010 | 2 | gpu_mem sweep: 0.80 | 659.4 | 1.5169 | 1971.81 | 8582.86 | 1299.97 | 1998 | 2 |
+| E011 | 2 | gpu_mem sweep: 0.95 | 634.1 | 1.5770 | 2054.07 | 8927.22 | 1302.54 | 1997 | 3 |
+| E012 | 2 | no MTP at optimal (isolates MTP contribution) | 889.2 | 1.1246 | 1472.03 | 6373.42 | 1308.94 | 1998 | 2 |
+| E013 | 2 | no CUDA graphs at optimal (isolates CG contribution) | 682.2 | 1.4664 | 1902.06 | 8292.75 | 1297.41 | 1998 | 2 |
+| E014 | 2 | BF16 weights at optimal config (isolates FP8 weight contribution) | 733.4 | 1.3635 | 1828.37 | 7770.93 | 1340.90 | 1997 | 3 |
+| E015 | 2 | BF16 reference (text-only, no opts) | 1903.6 | 0.5260 | 708.75 | 3001.49 | 1347.47 | 1997 | 3 |
 
 ### 4.6 Per-technique contribution
 
