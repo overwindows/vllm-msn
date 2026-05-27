@@ -3,7 +3,7 @@
 **Hardware target**: A100 80 GB (sm_80)  
 **Dataset**: `datasets/sc1_delta_v2.jsonl` (sc1 only)  
 **Driver**: `bench_experiment.py` via `run_experiments.sh`  
-**Results**: `results/all_runs.csv` + per-run JSON  
+**Results**: default `results/all_runs.csv` + per-run JSON; completed 40G mock run at `results_A100_40G_mock/all_runs.csv`  
 **Analysis**: `python3 analyze_results.py` → `results/summary.md`
 
 ---
@@ -212,6 +212,70 @@ isolated contribution.
 | E016 | E | **bf16** | auto | ✗ | **—** | 128 | 0.90 | text_only |
 
 Bold = the parameter(s) that differ from E006.
+
+---
+
+## Current execution status — A100 40G mock
+
+This branch now has a completed **A100 40G mock** result set in:
+
+- `benchmarks/gemma4_moe_benchmarks/results_A100_40G_mock/all_runs.csv`
+- `benchmarks/gemma4_moe_benchmarks/results_A100_40G_mock/all_runs.md`
+
+These runs were launched with `--mock-a100-40g`, which applies `GPU_MEM_SCALE=0.5`.
+As a result, the effective `gpu_memory_utilization` values in the recorded runs are:
+
+- nominal `0.90` → effective `0.45`
+- nominal `0.95` → effective `0.475`
+
+Completed experiments in this folder:
+
+- E002
+- E004
+- E005
+- E006
+- E007
+- E008
+- E009
+- E011
+- E012
+- E013
+
+Not present in the current `results_A100_40G_mock` folder:
+
+- E001, E003
+- E010
+- E014, E015, E016
+
+### Aggregated results (mean over 2 reps)
+
+| ID | Label | Mean req/s | Mean output tok/s | Mean total tok/s | Mean elapsed (s) |
+|---|---|---:|---:|---:|---:|
+| E002 | +FP8 weights (kv cache stays BF16 / auto) | 0.2026 | 258.04 | 1141.01 | 4937.003 |
+| E004 | +CUDA graphs | 0.5164 | 661.79 | 2912.43 | 1936.470 |
+| E005 | +MTP speculative decoding (k=5) | 0.7851 | 999.45 | 4421.12 | 1273.890 |
+| E006 | +text-only model (vision stripped) | 0.9010 | 1167.49 | 5094.31 | 1110.276 |
+| E007 | batch sweep: mns=64 | 0.9607 | 1245.32 | 5432.67 | 1040.925 |
+| E008 | batch sweep: mns=192 | 0.9140 | 1200.18 | 5183.51 | 1094.206 |
+| E009 | batch sweep: mns=256 | 0.8940 | 1142.20 | 5038.42 | 1118.604 |
+| E011 | gpu_mem sweep: 0.95 | **1.0901** | **1412.13** | **6163.29** | **917.365** |
+| E012 | no MTP at optimal | 0.5459 | 696.60 | 3075.76 | 1831.988 |
+| E013 | no CUDA graphs at optimal | 0.6253 | 805.12 | 3530.41 | 1599.209 |
+
+### Main findings from the completed 40G mock sweep
+
+| Finding | Evidence |
+|---|---|
+| Best completed config is **E011** | Highest req/s (`1.0901`), output tok/s (`1412.13`), and total tok/s (`6163.29`) among completed runs. |
+| End-to-end stackup over E002 is large | E011 vs E002: `+438.1%` req/s, `+447.3%` output tok/s, `+440.2%` total tok/s. |
+| MTP is a major contributor | E006 vs E012: `+65.0%` req/s with MTP enabled. |
+| CUDA graphs are also material | E006 vs E013: `+44.1%` req/s with CUDA graphs enabled. |
+| Text-only conversion helps further | E006 vs E005: `+14.8%` req/s after stripping vision path overhead. |
+| For `max_num_seqs`, **64** beat 128/192/256 in this 40G mock run | E007 outperformed E006/E008/E009 on req/s and total tok/s. |
+
+Interpretation note:
+
+- The current best result is **within the completed subset only**. Since E010 and the BF16 isolation runs are absent from this folder, this is not yet a mathematically complete 16-experiment comparison set.
 
 ---
 
