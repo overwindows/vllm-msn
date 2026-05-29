@@ -32,6 +32,7 @@ jobs:
           const hasVerifiedLabel = pr.labels.some(l => l.name === 'verified');
           const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
           const isTrustedAuthor = trustedAssociations.has(pr.author_association);
+          const isDependabot = pr.user.login === 'dependabot[bot]';
 
           const { data: mergedPRs } = await github.rest.search.issuesAndPullRequests({
             q: `repo:${context.repo.owner}/${context.repo.repo} is:pr is:merged author:${pr.user.login}`,
@@ -39,10 +40,10 @@ jobs:
           });
           const mergedCount = mergedPRs.total_count;
 
-          if (hasReadyLabel || hasVerifiedLabel || mergedCount >= 4 || isTrustedAuthor) {
-            core.info(`Check passed: verified label=${hasVerifiedLabel}, ready label=${hasReadyLabel}, trusted author=${isTrustedAuthor}, 4+ merged PRs=${mergedCount >= 4}`);
+          if (hasReadyLabel || hasVerifiedLabel || mergedCount >= 4 || isTrustedAuthor || isDependabot) {
+            core.info(`Check passed: verified label=${hasVerifiedLabel}, ready label=${hasReadyLabel}, trusted author=${isTrustedAuthor}, dependabot=${isDependabot}, 4+ merged PRs=${mergedCount >= 4}`);
           } else {
-            core.setFailed(`PR must have the 'verified' or 'ready' (which also triggers tests) label, be opened by an OWNER/MEMBER/COLLABORATOR, or the author must have at least 4 merged PRs (found ${mergedCount}).`);
+            core.setFailed(`PR must have the 'verified' or 'ready' (which also triggers tests) label, be opened by an OWNER/MEMBER/COLLABORATOR, be opened by dependabot[bot], or the author must have at least 4 merged PRs (found ${mergedCount}).`);
           }
 
   pre-commit:
@@ -51,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-    - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: "3.12"
     - run: echo "::add-matcher::.github/workflows/matchers/actionlint.json"
