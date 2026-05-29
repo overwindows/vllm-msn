@@ -232,29 +232,42 @@ class Gemma4ProcessingInfo(BaseProcessingInfo):
         self, seq_len: int, mm_counts: Mapping[str, int]
     ) -> Mapping[str, int] | None:
         config = self.get_hf_config()
-        # Upper bound: the pooler outputs max_soft_tokens slots per image.
-        # After padding is stripped the actual count is ≤ this value, but
-        # vLLM needs the max for memory planning.
-        tokens_per_image = config.vision_config.default_output_length
-        merged_kwargs = self.ctx.get_merged_mm_kwargs({})
-        val, _ = _get_max_soft_tokens(merged_kwargs)
-        if isinstance(val, int) and val in _SUPPORTED_SOFT_TOKENS:
-            tokens_per_image = val
-        tokens: dict[str, int] = {"image": tokens_per_image}
+        tokens: dict[str, int] = {}
+
+        # Image / video tokens are only reportable if the checkpoint actually
+        # has a vision encoder. The text-only Gemma 4 variant (built by
+        # create_text_only_model.py) strips vision weights and sets
+        # vision_config=None, but its architectures field still routes here
+        # because the language-model weights live under model.language_model.*.
+        # Without these guards, AttributeError on `.default_output_length`
+        # kills engine init for the text-only checkpoint.
+        if config.vision_config is not None:
+            # Upper bound: the pooler outputs max_soft_tokens slots per image.
+            # After padding is stripped the actual count is ≤ this value, but
+            # vLLM needs the max for memory planning.
+            tokens_per_image = config.vision_config.default_output_length
+            merged_kwargs = self.ctx.get_merged_mm_kwargs({})
+            val, _ = _get_max_soft_tokens(merged_kwargs)
+            if isinstance(val, int) and val in _SUPPORTED_SOFT_TOKENS:
+                tokens_per_image = val
+            tokens["image"] = tokens_per_image
+
+            # Video: each frame ≤ 70 soft tokens + boi + eoi + ~6 ts tokens.
+            num_frames = _VIDEO_MAX_FRAMES
+            mm_config = self.ctx.model_config.get_multimodal_config()
+            video_opts = mm_config.limit_per_prompt.get("video")
+            if (
+                isinstance(video_opts, VideoDummyOptions)
+                and video_opts.num_frames is not None
+            ):
+                num_frames = min(num_frames, video_opts.num_frames)
+            tokens["video"] = num_frames * (_VIDEO_MAX_SOFT_TOKENS + 2 + 6)
+
         if config.audio_config is not None:
             # Audio max tokens from the processor's audio_seq_length.
             processor = self.get_hf_processor()
             tokens["audio"] = processor.audio_seq_length
-        # Video: each frame ≤ 70 soft tokens + boi + eoi + ~6 ts tokens.
-        num_frames = _VIDEO_MAX_FRAMES
-        mm_config = self.ctx.model_config.get_multimodal_config()
-        video_opts = mm_config.limit_per_prompt.get("video")
-        if (
-            isinstance(video_opts, VideoDummyOptions)
-            and video_opts.num_frames is not None
-        ):
-            num_frames = min(num_frames, video_opts.num_frames)
-        tokens["video"] = num_frames * (_VIDEO_MAX_SOFT_TOKENS + 2 + 6)
+
         return tokens
 
     def get_data_parser(self) -> MultiModalDataParser:
@@ -955,11 +968,21 @@ class Gemma4ForConditionalGeneration(
         self.multimodal_config = multimodal_config
 
         # ---- Vision tower (shared by image and video) ----
-        with self._mark_tower_model(vllm_config, {"image", "video"}):
-            self.vision_tower = AutoModel.from_config(config=config.vision_config)
-            self.embed_vision = Gemma4MultimodalEmbedder(
-                config.vision_config, config.text_config
-            )
+        # Text-only Gemma 4 variant: vision_config=None on disk. Skip vision
+        # tower construction so the multimodal class can still load the LM
+        # weights from a checkpoint that has the multimodal weight-name
+        # layout (model.language_model.*) but no vision encoder. Image /
+        # video inputs aren't supported in this mode — that's fine for
+        # text-only inference, which is the whole point of the variant.
+        if config.vision_config is not None:
+            with self._mark_tower_model(vllm_config, {"image", "video"}):
+                self.vision_tower = AutoModel.from_config(config=config.vision_config)
+                self.embed_vision = Gemma4MultimodalEmbedder(
+                    config.vision_config, config.text_config
+                )
+        else:
+            self.vision_tower = None
+            self.embed_vision = None
 
         # ---- Audio tower (variants with audio_config) ----
         if config.audio_config is not None:
