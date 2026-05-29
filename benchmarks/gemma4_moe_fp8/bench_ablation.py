@@ -45,6 +45,7 @@ CSV_FIELDS = [
     "enforce_eager", "mtp", "mtp_k",
     "max_num_seqs", "gpu_memory_utilization", "model_variant",
     "num_prompts", "output_len_cap", "max_model_len", "max_num_batched_tokens",
+    "enable_chunked_prefill",
     "rep", "seed",
     "elapsed_time",
     "requests_per_second",
@@ -446,6 +447,11 @@ def run_experiment(
     prompts = render_chat(tok, raw_prompts)
     print(f"loaded {len(prompts)} prompts from {sc_cfg['dataset']}", flush=True)
 
+    # Allow per-experiment override of scenario-level knobs that the sweep
+    # driver tunes (max_num_batched_tokens, enable_chunked_prefill).
+    eff_mnbt = exp_cfg.get("max_num_batched_tokens", sc_cfg["max_num_batched_tokens"])
+    eff_chunked = exp_cfg.get("enable_chunked_prefill", None)  # None = vLLM default
+
     # Build LLM kwargs
     llm_kwargs: dict = dict(
         model=model,
@@ -453,11 +459,13 @@ def run_experiment(
         dtype=exp_cfg.get("dtype", "bfloat16"),
         max_model_len=sc_cfg["max_model_len"],
         max_num_seqs=exp_cfg["max_num_seqs"],
-        max_num_batched_tokens=sc_cfg["max_num_batched_tokens"],
+        max_num_batched_tokens=eff_mnbt,
         gpu_memory_utilization=exp_cfg["gpu_memory_utilization"],
         enforce_eager=exp_cfg["enforce_eager"],
         seed=0,
     )
+    if eff_chunked is not None:
+        llm_kwargs["enable_chunked_prefill"] = eff_chunked
     if exp_cfg["quantization"]:
         llm_kwargs["quantization"] = exp_cfg["quantization"]
     if exp_cfg["kv_cache_dtype"] != "auto":
@@ -524,7 +532,10 @@ def run_experiment(
             "num_prompts": len(prompts),
             "output_len_cap": sc_cfg["output_len"],
             "max_model_len": sc_cfg["max_model_len"],
-            "max_num_batched_tokens": sc_cfg["max_num_batched_tokens"],
+            "max_num_batched_tokens": eff_mnbt,
+            "enable_chunked_prefill": (
+                "default" if eff_chunked is None else str(eff_chunked)
+            ),
             "rep": rep,
             "seed": seed,
             "elapsed_time": round(elapsed, 3),
